@@ -153,8 +153,7 @@ func (c choice) env(switchFile string) []string {
 }
 
 func interactive(args []string) bool {
-	info, err := os.Stdin.Stat()
-	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+	if !isTerminal(os.Stdin.Fd()) || !isTerminal(os.Stdout.Fd()) {
 		return false
 	}
 	for _, a := range args {
