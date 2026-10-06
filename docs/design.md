@@ -4,8 +4,9 @@ Status (6 October 2026): implemented are the chunked session archive with
 retention, account sign-in through `claude auth login` (dashboard, terminal, mod),
 live per-profile usage, account switching through the `nebula claude` launcher
 and the mod's usage-limit detection, `nebula setup` (service, mod, launcher), and
-Docker/systemd deployment. Reset redemption, Claustra sign-in and device pairing
-remain proposed. The approach is a Claude Code mod plus a local companion for
+Docker/systemd deployment, and dashboard sign-in through Claustra (OIDC code
+flow with PKCE, Nebula's own signed session). Reset redemption and device
+pairing remain proposed. The approach is a Claude Code mod plus a local companion for
 Windows and Linux.
 This document records the requested behavior and the boundaries found
 in Claustra, Claude documentation, and native client inspection on 6 October 2026.

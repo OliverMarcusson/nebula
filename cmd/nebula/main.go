@@ -26,6 +26,7 @@ import (
 
 	"github.com/olivermarcusson/nebula/internal/accounts"
 	"github.com/olivermarcusson/nebula/internal/logins"
+	"github.com/olivermarcusson/nebula/internal/oidc"
 	"github.com/olivermarcusson/nebula/internal/sessions"
 	"github.com/olivermarcusson/nebula/web"
 )
@@ -186,6 +187,11 @@ func serve(args []string) error {
 	listen := f.String("listen", "127.0.0.1:13003", "HTTP bind address")
 	data := f.String("data", ".nebula/data", "persistent archive directory")
 	auth := f.String("auth", env("NEBULA_AUTH_FILE", ".nebula/users.json"), "JSON archive owner to bearer token map")
+	publicURL := f.String("public-url", os.Getenv("NEBULA_PUBLIC_URL"), "public https origin, needed for dashboard sign-in")
+	issuer := f.String("oidc-issuer", os.Getenv("NEBULA_OIDC_ISSUER"), "OpenID Connect issuer for dashboard sign-in (Claustra)")
+	clientID := f.String("oidc-client-id", os.Getenv("NEBULA_OIDC_CLIENT_ID"), "OpenID Connect client id; the secret is read from NEBULA_OIDC_CLIENT_SECRET")
+	oidcOwner := f.String("oidc-owner", os.Getenv("NEBULA_OIDC_OWNER"), "archive owner dashboard sign-ins act as (default: the only owner)")
+	oidcEmails := f.String("oidc-emails", os.Getenv("NEBULA_OIDC_EMAILS"), "comma-separated verified emails allowed to sign in, checked in addition to the provider")
 	if err := parse(f, args); err != nil {
 		return err
 	}
@@ -214,6 +220,28 @@ func serve(args []string) error {
 		seen[token] = true
 		credentials = append(credentials, credential{owner, sha256.Sum256([]byte(token))})
 	}
+	var signin *oidc.Provider
+	if *issuer != "" {
+		owner := *oidcOwner
+		if owner == "" && len(credentials) == 1 {
+			owner = credentials[0].owner
+		}
+		key, err := sessionKey(filepath.Join(filepath.Dir(filepath.Clean(*data)), "session.key"))
+		if err != nil {
+			return err
+		}
+		emails := []string{}
+		for _, e := range strings.Split(*oidcEmails, ",") {
+			if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+				emails = append(emails, e)
+			}
+		}
+		signin, err = oidc.New(oidc.Config{Issuer: *issuer, ClientID: *clientID, ClientSecret: os.Getenv("NEBULA_OIDC_CLIENT_SECRET"), PublicURL: *publicURL, Owner: owner, Emails: emails, Key: key})
+		if err != nil {
+			return err
+		}
+		log.Print("Dashboard sign-in through ", *issuer, " as owner ", owner)
+	}
 	store, err := sessions.Open(*data)
 	if err != nil {
 		return err
@@ -227,6 +255,32 @@ func serve(args []string) error {
 	signIns := logins.New()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.HandleFunc("/auth/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		switch {
+		case r.URL.Path == "/auth/config":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]bool{"claustra": signin != nil})
+		case signin == nil:
+			http.NotFound(w, r)
+		case r.URL.Path == "/auth/login" && r.Method == "GET":
+			signin.Start(w, r)
+		case r.URL.Path == "/auth/callback" && r.Method == "GET":
+			if _, err := signin.Callback(w, r); err != nil {
+				log.Print("Dashboard sign-in failed: ", err)
+			}
+		case r.URL.Path == "/auth/logout" && r.Method == "POST":
+			if r.Header.Get("Origin") != signin.Origin() {
+				http.Error(w, "cross-origin request refused", 403)
+				return
+			}
+			signin.Logout(w)
+			w.WriteHeader(204)
+		default:
+			http.NotFound(w, r)
+		}
+	})
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -237,6 +291,17 @@ func serve(args []string) error {
 			for _, c := range credentials {
 				if subtle.ConstantTimeCompare(hash[:], c.hash[:]) == 1 {
 					owner = c.owner
+				}
+			}
+		} else if signin != nil {
+			// Dashboard session. Its cookie is SameSite=Strict; writes must also
+			// come from the dashboard's own origin.
+			if o, ok := signin.Session(r); ok {
+				if r.Method == "GET" || r.Method == "HEAD" || r.Header.Get("Origin") == signin.Origin() {
+					owner = o
+				} else {
+					http.Error(w, "cross-origin request refused", 403)
+					return
 				}
 			}
 		}
@@ -287,6 +352,22 @@ func serve(args []string) error {
 		return nil
 	}
 	return err
+}
+
+// sessionKey loads the dashboard cookie key, creating it on first start.
+// Deleting the file signs every browser out.
+func sessionKey(path string) ([]byte, error) {
+	if b, err := os.ReadFile(path); err == nil && len(b) >= 32 {
+		return b, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // decodeJSON reads one bounded JSON object with no unknown fields.

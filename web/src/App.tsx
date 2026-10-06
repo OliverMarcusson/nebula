@@ -8,10 +8,10 @@ import Console from "./Console";
 
 export default function App() {
   const [owner, setOwner] = useState<string | null>(null);
-  const [checking, setChecking] = useState(!!token.get());
+  const [checking, setChecking] = useState(true);
 
+  // A stored device token or a Claustra session cookie may already sign us in.
   useEffect(() => {
-    if (!token.get()) return;
     api
       .me()
       .then((m) => setOwner(m.owner))

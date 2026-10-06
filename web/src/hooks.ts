@@ -60,7 +60,7 @@ export function useDashboard(owner: string, onAuthLost: () => void): Dashboard {
 
   const signOut = useCallback(() => {
     token.clear();
-    onAuthLost();
+    void api.logout().then(onAuthLost);
   }, [onAuthLost]);
 
   return { owner, sessions, devices: devicesOf(sessions), accounts, mutateAccounts, loading, error, refreshedAt, refresh, signOut };

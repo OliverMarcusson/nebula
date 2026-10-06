@@ -13,7 +13,7 @@ CLI) on Windows and Linux. Claude Desktop is out of scope.
   account when a usage limit is hit.
 
 Not implemented yet: redeeming usage resets (planned with Claustra passkey
-approval), Claustra sign-in for the dashboard, and per-device revocation.
+approval) and per-device revocation.
 See the [design](docs/design.md).
 
 ## Install on a device
@@ -108,14 +108,21 @@ run `nebula serve` behind a TLS reverse proxy; [deploy/nebula-server.service](de
 is a hardened systemd unit. Back up the data directory.
 
 Transcripts contain prompts, code, and tool output; the server can read them (no
-end-to-end encryption). The dashboard signs in with a device token, kept in the
-tab's session storage. `init` creates one token per user; add owners to
+end-to-end encryption). The dashboard signs in through Claustra when configured
+(`--oidc-issuer`, `--oidc-client-id`, `--public-url`, and `NEBULA_OIDC_CLIENT_SECRET`;
+on NixOS `services.nebula.claustra`): authorization code with PKCE, a verified ID
+token, an optional extra email allowlist (`--oidc-emails`), and then Nebula's own
+30-day signed session cookie. Register the client with the redirect URI
+`<public URL>/auth/callback`. A device token also works and is kept in the tab's
+session storage. `init` creates one token per user; add owners to
 `users.json` with distinct random 32-byte base64url tokens and restart. The
 companion refuses plain HTTP outside loopback and refuses redirects.
 
 ### API
 
-Bearer authentication determines the owner. `GET /v1/me`.
+A device token (bearer) or a dashboard session determines the owner; dashboard
+sessions may only write from the dashboard's own origin. `GET /v1/me`.
+Sign-in: `GET /auth/config`, `/auth/login`, `/auth/callback`, `POST /auth/logout`.
 
 - Archive: `GET /v1/sessions[?latest=1]`, `GET /v1/sessions/{device}/{session}[?revision=]`,
   `POST /v1/chunks/missing`, `PUT /v1/chunks/{sha256}`, `PUT /v1/sessions/{device}/{session}`

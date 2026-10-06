@@ -13,6 +13,13 @@ in {
     listenAddress = mkOption { type = types.str; default = "127.0.0.1:13005"; };
     owner = mkOption { type = types.str; description = "Archive owner whose device token is created on first start."; };
     caddy = mkOption { type = types.bool; default = true; description = "Serve the domain through the NixOS Caddy service."; };
+    claustra = {
+      enable = mkEnableOption "dashboard sign-in through Claustra (OpenID Connect)";
+      issuer = mkOption { type = types.str; default = "https://claustra.marcusson.dev"; };
+      clientId = mkOption { type = types.str; default = "nebula"; };
+      emails = mkOption { type = types.listOf types.str; default = [ ]; description = "Verified emails allowed to sign in, checked in addition to Claustra's own allowlist."; };
+    };
+    environmentFile = mkOption { type = types.nullOr types.str; default = null; description = "Root-managed environment file with NEBULA_OIDC_CLIENT_SECRET; do not use a Nix store path."; };
     backup = {
       enable = mkEnableOption "daily encrypted Nebula backups";
       directory = mkOption { type = types.str; default = "/var/backup/nebula"; };
@@ -24,6 +31,7 @@ in {
     assertions = [
       { assertion = builtins.match "[A-Za-z0-9._-]+" cfg.owner != null; message = "services.nebula.owner must be a plain name"; }
       { assertion = !cfg.backup.enable || cfg.backup.ageRecipient != ""; message = "services.nebula.backup.ageRecipient is required when backups are enabled"; }
+      { assertion = !cfg.claustra.enable || cfg.environmentFile != null; message = "services.nebula.environmentFile with NEBULA_OIDC_CLIENT_SECRET is required for Claustra sign-in"; }
     ];
 
     users.groups.nebula = { };
@@ -45,6 +53,13 @@ in {
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
+      environment = lib.optionalAttrs cfg.claustra.enable {
+        NEBULA_PUBLIC_URL = "https://${cfg.domain}";
+        NEBULA_OIDC_ISSUER = cfg.claustra.issuer;
+        NEBULA_OIDC_CLIENT_ID = cfg.claustra.clientId;
+        NEBULA_OIDC_OWNER = cfg.owner;
+        NEBULA_OIDC_EMAILS = lib.concatStringsSep "," cfg.claustra.emails;
+      };
       # First start: create the owner's credentials. The device token is then
       # read once by the owner (sudo cat ${credentials}/device.token).
       preStart = "test -e ${credentials} || ${cfg.package}/bin/nebula init --user ${lib.escapeShellArg cfg.owner} --dir ${credentials}";
@@ -53,6 +68,7 @@ in {
         User = "nebula";
         Group = "nebula";
         ExecStart = "${cfg.package}/bin/nebula serve --listen ${cfg.listenAddress} --data ${stateDir}/archive --auth ${credentials}/users.json";
+        EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         StateDirectory = "nebula";
         StateDirectoryMode = "0700";
         Restart = "on-failure";

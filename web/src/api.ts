@@ -72,10 +72,13 @@ export const token = {
 };
 
 async function request<T>(path: string, init: { method?: string; body?: unknown; bearer?: string } = {}): Promise<T> {
+  // Without a device token the dashboard's Claustra session cookie authenticates.
+  const bearer = init.bearer ?? token.get();
   const res = await fetch(path, {
     method: init.method ?? "GET",
+    credentials: "same-origin",
     headers: {
-      Authorization: `Bearer ${init.bearer ?? token.get()}`,
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
       ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -88,6 +91,8 @@ async function request<T>(path: string, init: { method?: string; body?: unknown;
 }
 
 export const api = {
+  authConfig: () => fetch("/auth/config", { cache: "no-store" }).then((r) => (r.ok ? (r.json() as Promise<{ claustra: boolean }>) : { claustra: false })),
+  logout: () => fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined),
   me: (bearer?: string) => request<{ owner: string }>("/v1/me", { bearer }),
   sessions: () => request<Snapshot[]>("/v1/sessions"),
   session: (device: string, session: string, revision?: string) =>
