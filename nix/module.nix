@@ -103,7 +103,8 @@ in {
         CapabilityBoundingSet = "";
         AmbientCapabilities = "";
         SystemCallArchitectures = "native";
-        SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
+        # Claude Code's runtime sets thread priorities (@resources).
+        SystemCallFilter = [ "@system-service" "~@privileged" ] ++ lib.optional (!cfg.sharedAccounts.enable) "~@resources";
       };
     };
 
