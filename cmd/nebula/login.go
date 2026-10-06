@@ -190,6 +190,10 @@ type signIn struct {
 func (a *loginAgent) run(ctx context.Context) {
 	a.active = map[string]*signIn{}
 	name, _ := os.Hostname()
+	// WSL shares the Windows hostname; tell the two companions apart.
+	if v, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil && strings.Contains(strings.ToLower(string(v)), "microsoft") {
+		name += " (WSL)"
+	}
 	for {
 		var w logins.Work
 		if err := a.c.call(ctx, "POST", "/v1/devices/"+a.device+"/poll", map[string]string{"name": name}, &w); err == nil {
