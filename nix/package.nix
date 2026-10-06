@@ -45,6 +45,7 @@ buildGoModule {
   meta = {
     description = "Claude Code session archive and account switching";
     homepage = "https://github.com/olivermarcusson/nebula";
+    license = lib.licenses.mit;
     mainProgram = "nebula";
     platforms = lib.platforms.linux;
   };

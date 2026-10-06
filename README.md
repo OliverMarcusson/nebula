@@ -142,3 +142,7 @@ scripts/release.sh 0.2.0              # Linux and Windows binaries with SHA256SU
 For dashboard work run `npm run dev` in `web/`; it proxies `/v1` to
 `127.0.0.1:13003`. Mod function hooks are an early-access Claude Code API: after
 Claude Code updates, run `claude plugin validate mods/nebula` again.
+
+## License
+
+MIT
