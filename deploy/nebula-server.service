@@ -1,0 +1,21 @@
+# Nebula server as a system service, without Docker. Put a TLS reverse proxy
+# (Caddy, nginx) in front; the server listens on loopback only.
+#   sudo useradd --system --home /var/lib/nebula --create-home nebula
+#   sudo -u nebula nebula init --user you --dir /var/lib/nebula/credentials
+#   sudo cp nebula-server.service /etc/systemd/system/ && sudo systemctl enable --now nebula-server
+[Unit]
+Description=Nebula server
+After=network-online.target
+
+[Service]
+User=nebula
+ExecStart=/usr/local/bin/nebula serve --listen 127.0.0.1:13003 --data /var/lib/nebula/archive --auth /var/lib/nebula/credentials/users.json
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nebula
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

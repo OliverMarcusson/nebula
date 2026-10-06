@@ -1,0 +1,7 @@
+{$NEBULA_DOMAIN} {
+	# Session uploads are chunked (16 MiB at most per request).
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy nebula:13003
+}

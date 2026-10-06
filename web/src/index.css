@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@theme {
+  --font-geist: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-geist-mono: "Geist Mono Variable", ui-monospace, monospace;
+}
+
+html {
+  color-scheme: dark;
+  background: #0e0d14;
+}
+body {
+  -webkit-font-smoothing: antialiased;
+}
+::selection {
+  background: rgb(124 92 255 / 0.35);
+}
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

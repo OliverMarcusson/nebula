@@ -1,0 +1,11 @@
+{
+  "name": "nebula",
+  "owner": { "name": "Oliver Marcusson" },
+  "plugins": [
+    {
+      "name": "nebula",
+      "source": "./mods/nebula",
+      "description": "Nebula for Claude Code: session archive, Claude sign-in, and automatic account switching."
+    }
+  ]
+}

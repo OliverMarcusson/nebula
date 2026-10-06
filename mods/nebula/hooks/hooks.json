@@ -1,0 +1,4 @@
+{
+ "description": "Periodic session archival and Nebula archive commands.",
+ "modules": ["./register.ts"]
+}

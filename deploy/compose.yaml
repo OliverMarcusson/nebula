@@ -1,0 +1,24 @@
+# Nebula behind Caddy, which obtains and renews the HTTPS certificate.
+# 1. Point a DNS name at this host and set NEBULA_DOMAIN (e.g. in .env).
+# 2. Create credentials once:
+#      docker compose run --rm nebula init --user you --dir /data/credentials
+#    and copy credentials/device.token out of the volume to your devices.
+# 3. docker compose up -d
+services:
+  nebula:
+    build: ..
+    restart: unless-stopped
+    volumes:
+      - nebula-data:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      NEBULA_DOMAIN: ${NEBULA_DOMAIN:?set NEBULA_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+volumes:
+  nebula-data:
+  caddy-data:

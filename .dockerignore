@@ -1,0 +1,6 @@
+.git
+bin
+release
+web/node_modules
+web/dist
+**/.claude-plugin/types

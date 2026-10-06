@@ -1,0 +1,8 @@
+{
+ "name": "nebula",
+ "version": "0.2.0",
+ "description": "Nebula for Claude Code: session archive, Claude sign-in, and automatic account switching.",
+ "author": {
+  "name": "Oliver Marcusson"
+ }
+}

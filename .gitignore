@@ -1,0 +1,10 @@
+/.nebula/
+/bin/
+*.exe
+/web/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep
+/mods/nebula/.claude-plugin/types/
+/release/
+# Private notes on native client internals; not published.
+/docs/claude-client-investigation.md
