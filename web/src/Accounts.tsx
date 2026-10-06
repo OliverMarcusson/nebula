@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import type { Account, Device, Limit, SignIn } from "./api";
-import { api } from "./api";
+import { api, isShared, SHARED_DEVICE } from "./api";
 import type { Dashboard } from "./hooks";
 import { fmt } from "./model";
 import { ease, stagger } from "./motion";
@@ -99,7 +99,7 @@ export default function Accounts(d: Dashboard) {
                   <IconButton disabled={i === 0} onClick={() => move(i, -1)} label="Move up" path="M4 10l4-4 4 4" />
                   <IconButton disabled={i === connected.length - 1} onClick={() => move(i, 1)} label="Move down" path="M4 6l4 4 4-4" />
                 </div>
-                <Disconnect onConfirm={() => d.mutateAccounts(() => api.disconnect(a.id))} />
+                <Disconnect shared={isShared(a)} onConfirm={() => d.mutateAccounts(() => api.disconnect(a.id))} />
               </div>
             </AccountRow>
           ))}
@@ -170,6 +170,9 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
   const name = a.display_name || a.email || a.id.slice(0, 8);
   const p = plan(a);
   const stale = a.usage ? Date.now() - Date.parse(a.usage.observed_at) > STALE_MS : true;
+  const shared = isShared(a);
+  const devices = a.sightings.filter((s) => s.device_id !== SHARED_DEVICE);
+  const source = (id: string) => (id === SHARED_DEVICE ? "server" : fmt.short(id));
   return (
     <motion.article
       layout
@@ -187,6 +190,7 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
           <div className="flex items-center gap-2">
             <span className="truncate font-medium text-[#ecebf3]">{name}</span>
             {p && <span className="rounded bg-[#7c5cff]/15 px-1.5 py-px text-[10px] font-medium text-[#c7b9ff]">{p}</span>}
+            {shared && <span className="rounded bg-[#5ad19a]/12 px-1.5 py-px text-[10px] font-medium text-[#8fe3bb]">All devices</span>}
             {a.state === "connected" && !a.enabled && <span className="rounded bg-white/[0.06] px-1.5 py-px text-[10px] text-[#a19db3]">Paused</span>}
             {a.limited_until && Date.parse(a.limited_until) > Date.now() && (
               <span className="rounded bg-[#e0a43a]/15 px-1.5 py-px text-[10px] font-medium text-[#f0c070]">
@@ -196,9 +200,11 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
           </div>
           <div className="mt-0.5 truncate text-xs text-[#77738a]">
             {a.display_name && a.email ? `${a.email} · ` : ""}
-            {a.sightings.length
-              ? `Signed in on ${a.sightings.map((s) => `${fmt.short(s.device_id)} (${s.profile})`).join(", ")} · reported ${fmt.ago(a.sightings[0].reported_at)}`
-              : "Not signed in on any device"}
+            {shared
+              ? `Shared from the server · on ${devices.length} ${devices.length === 1 ? "device" : "devices"}`
+              : a.sightings.length
+                ? `Signed in on ${a.sightings.map((s) => `${fmt.short(s.device_id)} (${s.profile})`).join(", ")} · reported ${fmt.ago(a.sightings[0].reported_at)}`
+                : "Not signed in on any device"}
           </div>
         </div>
         {children}
@@ -210,7 +216,7 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
               <Meter key={l.kind} limit={l} stale={stale} />
             ))}
             <p className="col-span-2 text-[11px] text-[#5f5b72]">
-              {stale ? "Stale · " : ""}Usage as of {fmt.ago(a.usage.observed_at)} from {fmt.short(a.usage.device_id)}
+              {stale ? "Stale · " : ""}Usage as of {fmt.ago(a.usage.observed_at)} from {source(a.usage.device_id)}
             </p>
           </>
         ) : (
@@ -287,7 +293,7 @@ function IconButton({ path, label, onClick, disabled }: { path: string; label: s
   );
 }
 
-function Disconnect({ onConfirm }: { onConfirm: () => void }) {
+function Disconnect({ shared, onConfirm }: { shared: boolean; onConfirm: () => void }) {
   const [asking, setAsking] = useState(false);
   useEffect(() => {
     if (!asking) return;
@@ -298,7 +304,7 @@ function Disconnect({ onConfirm }: { onConfirm: () => void }) {
   return (
     <AnimatePresence mode="wait" initial={false}>
       {asking ? (
-        <motion.button key="confirm" {...swap} onClick={onConfirm} className="rounded-md border border-[#ff7a90]/40 bg-[#ff7a90]/10 px-3 py-1.5 text-xs text-[#ffb3c0] hover:bg-[#ff7a90]/20" title="Removes its priority and preferences. Devices stay signed in.">
+        <motion.button key="confirm" {...swap} onClick={onConfirm} className="rounded-md border border-[#ff7a90]/40 bg-[#ff7a90]/10 px-3 py-1.5 text-xs text-[#ffb3c0] hover:bg-[#ff7a90]/20" title={shared ? "Signs every device out of this account." : "Removes its priority and preferences. Devices stay signed in."}>
           Confirm disconnect
         </motion.button>
       ) : (
@@ -327,6 +333,8 @@ function AddAccount({ onDone }: { onDone: () => void }) {
         .devices()
         .then((list) => {
           if (!live) return;
+          // Signing in once for every device comes first.
+          list.sort((a, b) => Number(b.id === SHARED_DEVICE) - Number(a.id === SHARED_DEVICE));
           setDevices(list);
           setDevice((d) => (d && list.some((x) => x.id === d) ? d : list[0]?.id));
         })
@@ -348,7 +356,7 @@ function AddAccount({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     if (signIn?.state !== "completed") return;
-    const t = setTimeout(onDone, 1400);
+    const t = setTimeout(onDone, signIn.device_id === SHARED_DEVICE ? 2600 : 1400);
     return () => clearTimeout(t);
   }, [signIn?.state, onDone]);
 
@@ -360,6 +368,7 @@ function AddAccount({ onDone }: { onDone: () => void }) {
     const d = devices?.find((x) => x.id === id);
     return d ? d.name || fmt.short(d.id) : "this device";
   };
+  const everywhere = signIn?.device_id === SHARED_DEVICE;
   const swap = { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 }, transition: { duration: 0.18, ease } };
 
   let body: React.ReactNode;
@@ -398,13 +407,13 @@ function AddAccount({ onDone }: { onDone: () => void }) {
     );
   } else if (signIn.state === "pending" || signIn.state === "starting" || signIn.state === "completing") {
     key = signIn.state === "completing" ? "completing" : "starting";
-    body = <Spinner label={signIn.state === "completing" ? "Connecting" : `Opening Claude sign-in on ${name(signIn.device_id)}`} />;
+    body = <Spinner label={signIn.state === "completing" ? "Connecting" : everywhere ? "Opening Claude sign-in" : `Opening Claude sign-in on ${name(signIn.device_id)}`} />;
   } else if (signIn.state === "waiting") {
     key = "waiting";
     body = (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-4">
-          <Spinner label={`Waiting for sign-in on ${name(signIn.device_id)}`} />
+          <Spinner label={everywhere ? "Sign in, then paste the code Claude shows" : `Waiting for sign-in on ${name(signIn.device_id)}`} />
           {signIn.url && (
             <a href={signIn.url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded-md border border-white/10 px-3 py-1.5 text-xs text-[#d9d6e4] hover:bg-white/5">
               Open sign-in page ↗
@@ -439,7 +448,7 @@ function AddAccount({ onDone }: { onDone: () => void }) {
         <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className="grid size-5 place-items-center rounded-full bg-[#5ad19a]/20 text-[#7fe0b2]">
           ✓
         </motion.span>
-        Connected
+        {everywhere ? "Connected · reaching every device within a minute" : "Connected"}
       </div>
     );
   } else {

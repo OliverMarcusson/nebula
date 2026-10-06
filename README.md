@@ -47,6 +47,8 @@ profile (its own `CLAUDE_CONFIG_DIR`) under `<user config>/Nebula/profiles/`:
   a device whose companion is online; the browser opens there and finishes by
   itself, or open the sign-in link elsewhere and paste the code Claude shows.
 - **Terminal:** `nebula login`. **Claude Code:** `/nebula-login`.
+- **All devices at once:** with shared accounts enabled on the server, choose
+  *All devices* in the dashboard, sign in, and paste the code Claude shows.
 
 Credentials stay in that profile on that device. Nebula profiles share sessions,
 settings, `CLAUDE.md`, skills, plugins, agents, commands, hooks, and history with
@@ -59,6 +61,25 @@ cached reading, refreshed every five minutes from Claude's usage endpoint with
 the profile's own access token while it is valid. The token is never refreshed,
 logged, or sent anywhere but Anthropic. In the dashboard, connected accounts can
 be reordered, opted out of switching, or disconnected.
+
+### Shared accounts
+
+`nebula serve --vault <dir>` (NixOS: `services.nebula.sharedAccounts.enable`)
+signs the server's own Claude Code CLI into an account once and shares it. The
+server keeps the refresh token and is the only one that renews, a few hours
+before each access token expires, by having its CLI make one tiny request.
+Companions fetch the current access token every minute and keep it, with no
+refresh token, in a managed profile per account, so no device can renew and
+sign the others out. A running Claude Code picks up the new token from its
+profile; a device offline for longer than a token lasts skips that account
+until it is back. Signing in to a shared profile yourself takes it out of
+sharing, and disconnecting a shared account signs every device out of it.
+
+The server needs the `claude` CLI (`NEBULA_CLAUDE_PATH` or `PATH`). Shared
+sign-ins are renewable credentials for your accounts: they never leave the
+server, are left out of backups, and access tokens go only to device tokens,
+never to the dashboard. On macOS, Claude Code keeps tokens in the keychain, so
+shared profiles do not work there yet.
 
 ## Switching
 
@@ -133,6 +154,8 @@ Sign-in: `GET /auth/config`, `/auth/login`, `/auth/callback`, `POST /auth/logout
 - Sign-in relay: `GET /v1/devices`, `POST /v1/logins`, `GET /v1/logins/{id}`,
   `POST /v1/logins/{id}/code|cancel`; companions use `POST /v1/devices/{device}/poll`
   and `PUT /v1/devices/{device}/logins/{id}`. Sign-ins live in memory for ten minutes.
+- Shared accounts: `GET /v1/vault` (device tokens only) returns each shared
+  account's identity and current access token.
 
 ## Development
 

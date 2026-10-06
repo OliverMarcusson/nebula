@@ -52,6 +52,10 @@ export type Account = {
 
 export type Device = { id: string; name?: string; last_seen: string };
 
+// The server's own sign-ins, shared with every device, appear as this device.
+export const SHARED_DEVICE = "6e656275-6c61-4000-8000-000000000001";
+export const isShared = (a: Account) => a.sightings.some((s) => s.device_id === SHARED_DEVICE);
+
 export type SignIn = {
   id: string;
   device_id: string;

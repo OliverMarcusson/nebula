@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Encrypted Nebula backup: the archive, accounts, and credentials in one
-# age-encrypted tar, keeping the newest seven.
+# age-encrypted tar, keeping the newest seven. Shared Claude sign-ins (vault/)
+# are left out: they are renewable credentials that never leave the server,
+# and losing them only means signing in again.
 #
 # Restore: stop nebula, decrypt and extract into /var/lib/nebula, remove
 # archive/<owner>/index.json (rebuilt from manifests on start), start nebula.
@@ -19,7 +21,7 @@ trap 'rm -f -- "$partial"' EXIT
 # Chunks are immutable and manifests are written atomically, so a live copy is
 # consistent up to the index, which a restore rebuilds.
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-tar -C "$state_dir" --exclude='.tmp-*' -cf - . | age --recipient "$age_recipient" --output "$partial"
+tar -C "$state_dir" --exclude='.tmp-*' --exclude=./vault -cf - . | age --recipient "$age_recipient" --output "$partial"
 mv -- "$partial" "$backup_dir/nebula-$timestamp.tar.age"
 
 mapfile -t backups < <(find "$backup_dir" -maxdepth 1 -type f -name 'nebula-*.tar.age' -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)

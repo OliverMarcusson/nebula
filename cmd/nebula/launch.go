@@ -76,6 +76,9 @@ func pick(ctx context.Context, exclude map[string]bool) (choice, error) {
 	}
 	local := map[string]profile{}
 	for _, p := range profiles {
+		if !usableToken(p) {
+			continue // a shared account whose token ran out while offline
+		}
 		if q, err := accounts.ReadLocal(p.Name, p.ConfigFile); err == nil && q != nil {
 			if _, dup := local[q.AccountUUID]; !dup {
 				local[q.AccountUUID] = p

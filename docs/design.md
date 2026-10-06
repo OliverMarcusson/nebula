@@ -140,6 +140,18 @@ after the account, reports it, and the server connects the account. Claude
 Code's mod can start the same flow with `/nebula-login`, limited to the
 browser on the same computer because a mod cannot write to a running process.
 
+Shared accounts use the same relay with the server as the device. The server
+runs `claude auth login` into a vault profile, so the sign-in completes by the
+pasted code. Renewal can replace the refresh token, so a sign-in copied to
+several devices could sign the others out at the first renewal; instead only
+the server ever renews, and devices receive access tokens alone. Claude Code
+renews only right before it calls the API, so the server marks its stored token
+expired and runs one minimal `claude -p` request, keeping the new token only if
+it changed. Devices write the token to a profile marked `.nebula-shared`. A
+running Claude Code whose in-memory token is past expiry, with no refresh
+token, keeps sending it; the API's 401 makes it reread the profile and continue
+with the newer token.
+
 ## Installation and first use
 
 The user installs the Nebula plugin, then asks Claude to set it up. The agent

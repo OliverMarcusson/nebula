@@ -19,6 +19,10 @@ in {
       clientId = mkOption { type = types.str; default = "nebula"; };
       emails = mkOption { type = types.listOf types.str; default = [ ]; description = "Verified emails allowed to sign in, checked in addition to Claustra's own allowlist."; };
     };
+    sharedAccounts = {
+      enable = mkEnableOption "Claude sign-ins kept on the server and shared with every device (runs the Claude Code CLI on the server)";
+      claudePackage = mkOption { type = types.package; default = pkgs.claude-code; defaultText = lib.literalExpression "pkgs.claude-code"; description = "Claude Code CLI the server signs in and renews with (unfree)."; };
+    };
     environmentFile = mkOption { type = types.nullOr types.str; default = null; description = "Root-managed environment file with NEBULA_OIDC_CLIENT_SECRET; do not use a Nix store path."; };
     backup = {
       enable = mkEnableOption "daily encrypted Nebula backups";
@@ -53,7 +57,10 @@ in {
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      environment = lib.optionalAttrs cfg.claustra.enable {
+      environment = lib.optionalAttrs cfg.sharedAccounts.enable {
+        NEBULA_CLAUDE_PATH = "${cfg.sharedAccounts.claudePackage}/bin/claude";
+        NEBULA_VAULT_DIR = "${stateDir}/vault";
+      } // lib.optionalAttrs cfg.claustra.enable {
         NEBULA_PUBLIC_URL = "https://${cfg.domain}";
         NEBULA_OIDC_ISSUER = cfg.claustra.issuer;
         NEBULA_OIDC_CLIENT_ID = cfg.claustra.clientId;
@@ -91,7 +98,8 @@ in {
         RestrictRealtime = true;
         RestrictSUIDSGID = true;
         LockPersonality = true;
-        MemoryDenyWriteExecute = true;
+        # Claude Code's JavaScript runtime compiles code at run time.
+        MemoryDenyWriteExecute = !cfg.sharedAccounts.enable;
         CapabilityBoundingSet = "";
         AmbientCapabilities = "";
         SystemCallArchitectures = "native";

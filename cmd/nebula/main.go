@@ -192,6 +192,7 @@ func serve(args []string) error {
 	clientID := f.String("oidc-client-id", os.Getenv("NEBULA_OIDC_CLIENT_ID"), "OpenID Connect client id; the secret is read from NEBULA_OIDC_CLIENT_SECRET")
 	oidcOwner := f.String("oidc-owner", os.Getenv("NEBULA_OIDC_OWNER"), "archive owner dashboard sign-ins act as (default: the only owner)")
 	oidcEmails := f.String("oidc-emails", os.Getenv("NEBULA_OIDC_EMAILS"), "comma-separated verified emails allowed to sign in, checked in addition to the provider")
+	vaultDir := f.String("vault", os.Getenv("NEBULA_VAULT_DIR"), "directory for Claude sign-ins shared with every device (needs the claude CLI)")
 	if err := parse(f, args); err != nil {
 		return err
 	}
@@ -253,6 +254,22 @@ func serve(args []string) error {
 	}
 	defer accountStore.Close()
 	signIns := logins.New()
+	var shared *vault
+	if *vaultDir != "" {
+		claude, err := realClaude()
+		if err != nil {
+			return err
+		}
+		owners := []string{}
+		for _, c := range credentials {
+			owners = append(owners, c.owner)
+		}
+		if err = os.MkdirAll(*vaultDir, 0700); err != nil {
+			return err
+		}
+		shared = &vault{dir: filepath.Clean(*vaultDir), claude: claude, owners: owners, signIns: signIns, store: accountStore}
+		log.Print("Sharing Claude sign-ins with every device, using ", claude)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/auth/", func(w http.ResponseWriter, r *http.Request) {
@@ -284,9 +301,9 @@ func serve(args []string) error {
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		token, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		owner := ""
-		if ok {
+		if bearer {
 			hash := sha256.Sum256([]byte(token))
 			for _, c := range credentials {
 				if subtle.ConstantTimeCompare(hash[:], c.hash[:]) == 1 {
@@ -315,12 +332,26 @@ func serve(args []string) error {
 			write(map[string]string{"owner": owner})
 			return
 		}
+		if r.URL.Path == "/v1/vault" {
+			// Access tokens go to device companions only, never to a browser.
+			switch {
+			case !bearer:
+				http.Error(w, "device token required", 403)
+			case r.Method != "GET":
+				http.Error(w, "method not allowed", 405)
+			case shared == nil:
+				write(map[string]any{"accounts": []vaultToken{}})
+			default:
+				write(map[string]any{"accounts": shared.Tokens(owner)})
+			}
+			return
+		}
 		if loginsPath(r.URL.Path) {
 			loginsAPI(w, r, owner, signIns, accountStore, write)
 			return
 		}
 		if r.URL.Path == "/v1/accounts" || strings.HasPrefix(r.URL.Path, "/v1/accounts/") || strings.HasPrefix(r.URL.Path, "/v1/devices/") {
-			accountsAPI(w, r, owner, accountStore, write)
+			accountsAPI(w, r, owner, accountStore, shared, write)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/v1/chunks") || strings.HasPrefix(r.URL.Path, "/v1/sessions") {
@@ -340,6 +371,9 @@ func serve(args []string) error {
 		defer cancel()
 		shutdownDone <- server.Shutdown(shutdown)
 	}()
+	if shared != nil {
+		go shared.run(ctx)
+	}
 	log.Print("Nebula archive listening on ", *listen)
 	err = server.ListenAndServe()
 	stop()
@@ -384,7 +418,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // accountsAPI serves account management. Devices report the accounts their
 // native profiles are signed into; the owner connects, orders and enables them.
-func accountsAPI(w http.ResponseWriter, r *http.Request, owner string, store *accounts.Store, write func(any)) {
+func accountsAPI(w http.ResponseWriter, r *http.Request, owner string, store *accounts.Store, shared *vault, write func(any)) {
 	respond := func(list []accounts.Account, err error) {
 		switch {
 		case errors.Is(err, accounts.ErrNotFound):
@@ -434,9 +468,15 @@ func accountsAPI(w http.ResponseWriter, r *http.Request, owner string, store *ac
 		if method("POST") {
 			if parts[2] == "connect" {
 				respond(store.Connect(owner, parts[1]))
-			} else {
-				respond(store.Disconnect(owner, parts[1]))
+				return
 			}
+			if shared != nil {
+				// Disconnecting a shared account signs the server out of it too.
+				if err := shared.Remove(owner, parts[1]); err != nil {
+					log.Print("Could not remove shared sign-in: ", err)
+				}
+			}
+			respond(store.Disconnect(owner, parts[1]))
 		}
 	case parts[0] == "accounts" && len(parts) == 2 && sessions.ID(parts[1]):
 		var body struct {
@@ -915,7 +955,15 @@ func syncSessions(args []string) error {
 	// that content, so the watcher skips unchanged sessions without reading them.
 	confirmed := map[string]string{}
 	reported := map[string]string{}
+	var sharedAt time.Time
 	syncOnce := func() error {
+		// Shared accounts first, so the report below includes new ones.
+		if time.Since(sharedAt) >= time.Minute {
+			sharedAt = time.Now()
+			if err := syncShared(ctx, c, *profiles); err != nil {
+				log.Print("Shared accounts not updated: ", err)
+			}
+		}
 		reportOnce()
 		var list []sessions.Snapshot
 		if err := c.call(ctx, "GET", "/v1/sessions?latest=1", nil, &list); err != nil {

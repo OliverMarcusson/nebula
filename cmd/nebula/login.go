@@ -269,18 +269,41 @@ func (a *loginAgent) signIn(id string, s *signIn) {
 		return
 	}
 	defer os.RemoveAll(pending)
+	if msg, ok := runSignIn(s, claudeLogin(s.ctx, claude, pending), func(link string) { a.status(id, logins.Waiting, link, "", "") }); !ok {
+		if msg != "" {
+			fail(msg)
+		}
+		return
+	}
+	p, _, err := finalize(pending, a.profiles)
+	if err != nil {
+		fail("Signed in, but the profile could not be saved: " + err.Error())
+		return
+	}
+	rep, err := localAccounts(a.profiles)
+	if err == nil {
+		err = sendReport(context.Background(), a.c, a.device, rep)
+	}
+	if err != nil {
+		fail("Signed in, but reporting the account failed")
+		return
+	}
+	a.status(id, logins.Completed, "", "", p.AccountUUID)
+}
 
-	cmd := claudeLogin(s.ctx, claude, pending)
+// runSignIn runs a prepared `claude auth login`, relaying the manual sign-in
+// URL out through waiting and pasted codes from s.codes into its stdin. When
+// it did not complete it returns a message for the dashboard, empty when the
+// sign-in was cancelled there.
+func runSignIn(s *signIn, cmd *exec.Cmd, waiting func(link string)) (string, bool) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		fail("Could not start Claude sign-in")
-		return
+		return "Could not start Claude sign-in", false
 	}
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err = cmd.Start(); err != nil {
-		fail("Could not start Claude sign-in")
-		return
+		return "Could not start Claude sign-in", false
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -308,7 +331,7 @@ func (a *loginAgent) signIn(id string, s *signIn) {
 				tailMu.Unlock()
 				if m := visitURL.FindStringSubmatch(acc.String()); m != nil && !sent {
 					sent = true
-					a.status(id, logins.Waiting, m[1], "", "")
+					waiting(m[1])
 				}
 			}
 			if err != nil {
@@ -332,9 +355,9 @@ loop:
 	<-read
 	if s.ctx.Err() != nil {
 		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
-			fail("Sign-in timed out")
+			return "Sign-in timed out", false
 		}
-		return // cancelled from the dashboard; the server already shows it
+		return "", false // cancelled from the dashboard; the server already shows it
 	}
 	if waitErr != nil {
 		msg := "Claude sign-in did not complete"
@@ -348,21 +371,7 @@ loop:
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
-		fail(msg)
-		return
+		return msg, false
 	}
-	p, _, err := finalize(pending, a.profiles)
-	if err != nil {
-		fail("Signed in, but the profile could not be saved: " + err.Error())
-		return
-	}
-	rep, err := localAccounts(a.profiles)
-	if err == nil {
-		err = sendReport(context.Background(), a.c, a.device, rep)
-	}
-	if err != nil {
-		fail("Signed in, but reporting the account failed")
-		return
-	}
-	a.status(id, logins.Completed, "", "", p.AccountUUID)
+	return "", true
 }
