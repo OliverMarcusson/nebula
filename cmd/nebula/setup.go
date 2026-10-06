@@ -254,7 +254,9 @@ func installStartup(bin string) error {
 	if err := os.WriteFile(script, []byte(body), 0644); err != nil {
 		return err
 	}
-	if err := exec.Command("wscript.exe", script).Start(); err != nil {
+	start := exec.Command("wscript.exe", script)
+	start.Dir, _ = os.UserHomeDir() // not wherever setup happened to run from
+	if err := start.Start(); err != nil {
 		return err
 	}
 	fmt.Println("The companion runs in the background and starts at login.")
