@@ -77,7 +77,7 @@ export default function Console(d: Dashboard) {
     <div className="flex h-dvh overflow-hidden bg-[#0e0d14] font-geist text-[13px] text-[#e8e6f0]">
       <aside className="flex w-[232px] shrink-0 flex-col border-r border-white/[0.06] bg-[#0a0910]">
         <div className="flex items-center gap-2.5 px-4 pt-4 pb-5">
-          <span className="grid size-7 place-items-center rounded-md bg-gradient-to-br from-[#8f73ff] to-[#5a3fd6] text-[13px] font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.12)_inset]">N</span>
+          <img src="/icon.png" alt="" className="size-7" />
           <div className="min-w-0 leading-tight">
             <div className="font-medium">Nebula</div>
             <div className="truncate text-xs text-[#77738a]">{d.owner}</div>

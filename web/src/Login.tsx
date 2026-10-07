@@ -54,7 +54,7 @@ export default function Login({ onSignedIn }: { onSignedIn: (owner: string) => v
         className="w-full max-w-sm rounded-xl border border-white/[0.08] bg-[#14121c] p-7 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]"
       >
         <div className="flex items-center gap-2.5">
-          <span className="grid size-7 place-items-center rounded-md bg-gradient-to-br from-[#8f73ff] to-[#5a3fd6] text-[13px] font-semibold text-white">N</span>
+          <img src="/icon.png" alt="" className="size-7" />
           <h1 className="text-lg font-medium tracking-tight">Sign in to Nebula</h1>
         </div>
 
