@@ -91,6 +91,8 @@ func run() error {
 		return login(args)
 	case "limited":
 		return limitedCommand(args)
+	case "restart-claude":
+		return restartClaudeCommand(args)
 	case "setup":
 		return setup(args)
 	case "switch":

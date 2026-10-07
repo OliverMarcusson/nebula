@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -360,5 +361,42 @@ func limitedCommand(args []string) error {
 		return err
 	}
 	fmt.Println("Recorded the usage limit; new sessions will use another account.")
+	return nil
+}
+
+// restartDelay lets Claude Code deliver the finished turn to its host first.
+const restartDelay = 2 * time.Second
+
+// restartClaudeCommand is called by the mod after a headless session's turn
+// hit a usage limit. A host such as T3 Code keeps one Claude Code process per
+// thread, so the launcher cannot switch beneath it; ending that process makes
+// the host start it again with --resume on the next message, and the launcher
+// then picks the next account. The ending runs detached, since Claude Code
+// ends its children as it exits.
+func restartClaudeCommand(args []string) error {
+	f := flags("restart-claude")
+	target := f.Int("pid", 0, "")
+	if err := parse(f, args); err != nil {
+		return err
+	}
+	if *target != 0 {
+		time.Sleep(restartDelay)
+		if !headlessClaude(*target) {
+			return nil // already gone, and the pid may be someone else's now
+		}
+		return endProcess(*target)
+	}
+	// Claude Code may run the command through a shell; look a few levels up.
+	pid := os.Getppid()
+	for i := 0; i < 3 && pid > 1 && !headlessClaude(pid); i++ {
+		pid = parentOf(pid)
+	}
+	if pid <= 1 || !headlessClaude(pid) {
+		return errors.New("not run by a headless Claude Code session")
+	}
+	if err := startDetached([]string{"restart-claude", "--pid", strconv.Itoa(pid)}, os.Environ()); err != nil {
+		return err
+	}
+	fmt.Println("Claude Code will restart on the next account.")
 	return nil
 }

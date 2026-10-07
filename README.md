@@ -110,9 +110,11 @@ confirm (a window at 100%); ordinary throttling never switches. The mod then
 records the limit on the server until the window resets. Under the launcher in a
 terminal, it also hands the session over and exits Claude Code, and the launcher
 resumes it with `--resume` on the next account, keeping flags such as `--model`.
-Nothing is resubmitted: you continue the conversation. For T3 Code and `-p` runs
-the launcher hands over to Claude directly; the next session it starts uses
-another account.
+Nothing is resubmitted: you continue the conversation. T3 Code keeps one Claude
+Code process per thread, so there the mod ends that process once the limited
+turn is delivered (`nebula restart-claude`); send your message again and T3 Code
+starts Claude with `--resume`, which the launcher runs on the next account. For
+`-p` runs the next run uses another account.
 
 ### Choosing an account
 
