@@ -9,7 +9,7 @@ let
     inherit version;
     src = "${src}/web";
     nodejs = nodejs_22;
-    npmDepsHash = "sha256-9ys+lqXoJAqNE8d0ELlcw+jJd+hu9/6s7fOWynwkXUM=";
+    npmDepsHash = "sha256-GCl0RWCTF47HMsa+lvX0WbFDes3cmOrrtUGBKXo+Yss=";
     # `npm run build` also writes dist/.gitkeep, which embed.go needs.
     installPhase = ''
       runHook preInstall

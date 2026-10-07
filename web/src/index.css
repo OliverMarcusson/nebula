@@ -7,15 +7,23 @@
   --font-geist-mono: "Geist Mono Variable", ui-monospace, monospace;
 }
 
+/* The icon's peach-to-violet edge: marks your prompts and whatever is selected. */
+@utility edge {
+  background: linear-gradient(180deg, #ffc9dc, #a98bff 55%, #6d4cf0);
+}
+@utility edge-x {
+  background: linear-gradient(90deg, #6d4cf0, #a98bff 45%, #ffc9dc);
+}
+
 html {
   color-scheme: dark;
-  background: #0e0d14;
+  background: #0c0a1d;
 }
 body {
   -webkit-font-smoothing: antialiased;
 }
 ::selection {
-  background: rgb(124 92 255 / 0.35);
+  background: rgb(169 139 255 / 0.35);
 }
 .scroll-thin {
   scrollbar-width: thin;
@@ -23,4 +31,17 @@ body {
 }
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+/* The one soft glow, borrowed from the icon's halo. Fixed so it never repaints on scroll. */
+.glow {
+  position: fixed;
+  top: -10rem;
+  left: -10rem;
+  width: 720px;
+  height: 720px;
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0.6;
+  filter: blur(64px);
+  background: radial-gradient(circle, rgb(124 82 255 / 0.45), rgb(255 160 200 / 0.12) 45%, transparent 70%);
 }

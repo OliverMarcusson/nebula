@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import { ArrowsClockwiseIcon, ChatsCircleIcon, CheckIcon, CopyIcon, DownloadSimpleIcon, MagnifyingGlassIcon, SignOutIcon, UsersIcon } from "@phosphor-icons/react";
 import { fade, fadeUp, stagger } from "./motion";
 import type { Dashboard } from "./hooks";
 import { useCopy, useTranscript } from "./hooks";
@@ -7,23 +8,18 @@ import { downloadTranscript, fmt, restoreCommand, sessionTitle, type Session } f
 import Prose from "./Prose";
 import Accounts from "./Accounts";
 
-// Three-pane workspace (filters → sessions → transcript) with keyboard
+// Icon rail, session index and a wide reading column, with keyboard
 // navigation, plus the Claude accounts view.
 
 type Filter = { kind: "all" } | { kind: "device"; id: string } | { kind: "project"; id: string };
 
 export default function Console(d: Dashboard) {
   const [view, setView] = useState<"sessions" | "accounts">(() => (location.hash === "#accounts" ? "accounts" : "sessions"));
-  const [filter, setFilterState] = useState<Filter>({ kind: "all" });
-  const setFilter = (f: Filter) => {
-    setFilterState(f);
-    setView("sessions");
-  };
+  const [filter, setFilter] = useState<Filter>({ kind: "all" });
   useEffect(() => {
     history.replaceState(null, "", view === "accounts" ? "#accounts" : location.pathname);
   }, [view]);
-  const connected = d.accounts.filter((a) => a.state === "connected").length;
-  const detected = d.accounts.length - connected;
+  const detected = d.accounts.filter((a) => a.state === "detected").length;
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string>();
   const search = useRef<HTMLInputElement>(null);
@@ -71,165 +67,154 @@ export default function Console(d: Dashboard) {
   }, [list, current, view]);
 
   const heading =
-    filter.kind === "all" ? "All sessions" : filter.kind === "device" ? `Device ${fmt.short(filter.id)}` : projects.find(([p]) => p === filter.id)?.[1].name;
+    filter.kind === "all" ? "Sessions" : filter.kind === "device" ? `Device ${fmt.short(filter.id)}` : projects.find(([p]) => p === filter.id)?.[1].name;
+  const sync = d.error ? "Offline" : d.refreshedAt ? `Synced ${fmt.ago(new Date(d.refreshedAt).toISOString())}` : "Loading";
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-[#0e0d14] font-geist text-[13px] text-[#e8e6f0]">
-      <aside className="flex w-[232px] shrink-0 flex-col border-r border-white/[0.06] bg-[#0a0910]">
-        <div className="flex items-center gap-2.5 px-4 pt-4 pb-5">
-          <img src="/icon.png" alt="" className="size-7" />
-          <div className="min-w-0 leading-tight">
-            <div className="font-medium">Nebula</div>
-            <div className="truncate text-xs text-[#77738a]">{d.owner}</div>
-          </div>
-        </div>
-        <LayoutGroup id="nav">
-        <nav className="scroll-thin flex-1 space-y-6 overflow-y-auto px-2">
-          <div className="space-y-px">
-            <NavItem active={view === "sessions" && filter.kind === "all"} onClick={() => setFilter({ kind: "all" })} label="All sessions" count={d.sessions.length} />
-            <NavItem
-              active={view === "accounts"}
-              onClick={() => setView("accounts")}
-              label="Claude accounts"
-              count={connected}
-              badge={detected > 0 ? `${detected} new` : undefined}
-            />
-          </div>
-          <NavGroup title="Devices">
-            {d.devices.map((v) => (
-              <NavItem key={v.id} mono active={view === "sessions" && filter.kind === "device" && filter.id === v.id} onClick={() => setFilter({ kind: "device", id: v.id })} label={fmt.short(v.id)} count={v.sessions} />
-            ))}
-          </NavGroup>
-          <NavGroup title="Projects">
-            {projects.map(([p, v]) => (
-              <NavItem key={p} active={view === "sessions" && filter.kind === "project" && filter.id === p} onClick={() => setFilter({ kind: "project", id: p })} label={v.name} count={v.count} />
-            ))}
-          </NavGroup>
-        </nav>
-        </LayoutGroup>
-        <div className="flex items-center justify-between border-t border-white/[0.06] px-4 py-3 text-xs text-[#77738a]">
-          <button onClick={d.refresh} className="flex items-center gap-2 hover:text-[#e8e6f0]">
-            <span className={`size-1.5 rounded-full ${d.error ? "bg-[#ff7a90]" : d.loading ? "animate-pulse bg-[#a18bff]" : "bg-[#5ad19a]"}`} />
-            {d.error ? "Offline" : d.refreshedAt ? `Synced ${fmt.ago(new Date(d.refreshedAt).toISOString())}` : "Loading"}
+    <div className="relative flex h-dvh overflow-hidden bg-[#0c0a1d] font-geist text-[13px] text-[#e9e5fa]">
+      <div aria-hidden className="glow" />
+
+      <LayoutGroup id="rail">
+        <nav className="relative flex w-16 shrink-0 flex-col items-center gap-2 border-r border-white/[0.06] py-4">
+          <img src="/icon.png" alt="Nebula" className="mb-4 size-9" />
+          <Rail label="Sessions" on={view === "sessions"} onClick={() => setView("sessions")} icon={<ChatsCircleIcon className="size-5" />} />
+          <Rail
+            label={detected ? `Claude accounts, ${detected} new` : "Claude accounts"}
+            on={view === "accounts"}
+            onClick={() => setView("accounts")}
+            icon={<UsersIcon className="size-5" />}
+            fresh={detected > 0}
+          />
+          <button
+            onClick={d.refresh}
+            aria-label={sync}
+            title={sync}
+            className={`mt-auto grid size-10 place-items-center rounded-xl transition-colors hover:bg-white/[0.05] ${d.error ? "text-[#ff9fbf]" : "text-[#8b84ad] hover:text-white"}`}
+          >
+            <motion.span animate={d.loading ? { rotate: 360 } : { rotate: 0 }} transition={d.loading ? { duration: 0.9, repeat: Infinity, ease: "linear" } : { duration: 0 }}>
+              <ArrowsClockwiseIcon className="size-5" />
+            </motion.span>
           </button>
-          <button onClick={d.signOut} className="hover:text-[#e8e6f0]">Sign out</button>
-        </div>
-      </aside>
+          <button onClick={d.signOut} aria-label="Sign out" title={`Sign out ${d.owner}`} className="grid size-10 place-items-center rounded-xl text-[#8b84ad] transition-colors hover:bg-white/[0.05] hover:text-white">
+            <SignOutIcon className="size-5" />
+          </button>
+        </nav>
+      </LayoutGroup>
 
       <AnimatePresence mode="wait" initial={false}>
-      {view === "accounts" ? (
-        <motion.main key="accounts" {...fadeUp} className="min-w-0 flex-1">
-          <Accounts {...d} />
-        </motion.main>
-      ) : (
-        <motion.div key="sessions" {...fadeUp} className="flex min-w-0 flex-1">
-          <section className="flex w-[380px] shrink-0 flex-col border-r border-white/[0.06]">
-            <div className="border-b border-white/[0.06] px-4 pt-4 pb-3">
-              <div className="flex items-baseline justify-between">
-                <h1 className="truncate text-[15px] font-medium">{heading}</h1>
-                <span className="tabular text-xs text-[#77738a]">{list.length}</span>
+        {view === "accounts" ? (
+          <motion.main key="accounts" {...fadeUp} className="relative min-w-0 flex-1">
+            <Accounts {...d} />
+          </motion.main>
+        ) : (
+          <motion.div key="sessions" {...fadeUp} className="relative flex min-w-0 flex-1">
+            <section className="flex w-[330px] shrink-0 flex-col border-r border-white/[0.06]">
+              <div className="px-5 pt-5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h1 className="truncate text-lg font-semibold tracking-tight">{heading}</h1>
+                  <span className="tabular text-xs text-[#8b84ad]">{list.length}</span>
+                </div>
+                <label className="relative mt-4 block">
+                  <span className="sr-only">Search sessions</span>
+                  <MagnifyingGlassIcon className="absolute top-1/2 left-0 size-4 -translate-y-1/2 text-[#8b84ad]" />
+                  <input
+                    ref={search}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search"
+                    className="w-full border-b border-white/10 bg-transparent py-2 pr-6 pl-6 outline-none placeholder:text-[#8b84ad] focus:border-[#a98bff]"
+                  />
+                  <kbd className="absolute top-1/2 right-0 -translate-y-1/2 rounded border border-white/10 px-1.5 font-geist-mono text-[10px] text-[#8b84ad]">/</kbd>
+                </label>
+                <select
+                  value={filter.kind === "all" ? "" : `${filter.kind}:${filter.id}`}
+                  onChange={(e) => {
+                    const [kind, id] = e.target.value.split(":");
+                    setFilter(kind ? { kind: kind as "device" | "project", id } : { kind: "all" });
+                  }}
+                  aria-label="Filter sessions"
+                  className="mt-3 w-full rounded-lg border border-white/10 bg-[#141128] px-2.5 py-1.5 text-xs text-[#c9c2e6] outline-none focus:border-[#a98bff]"
+                >
+                  <option value="">All projects and devices ({d.sessions.length})</option>
+                  <optgroup label="Projects">
+                    {projects.map(([p, v]) => (
+                      <option key={p} value={`project:${p}`}>{v.name} ({v.count})</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Devices">
+                    {d.devices.map((v) => (
+                      <option key={v.id} value={`device:${v.id}`}>{fmt.short(v.id)} ({v.sessions})</option>
+                    ))}
+                  </optgroup>
+                </select>
               </div>
-              <div className="relative mt-3">
-                <input
-                  ref={search}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search sessions"
-                  className="w-full rounded-md border border-white/[0.08] bg-[#14121c] py-1.5 pr-8 pl-3 outline-none placeholder:text-[#5f5b72] focus:border-[#7c5cff] focus:ring-2 focus:ring-[#7c5cff]/20"
-                />
-                <kbd className="absolute top-1/2 right-2 -translate-y-1/2 rounded border border-white/10 px-1.5 font-geist-mono text-[10px] text-[#77738a]">/</kbd>
-              </div>
-            </div>
-            <LayoutGroup id="sessions">
-            <ul className="scroll-thin flex-1 overflow-y-auto p-2">
-              {d.error && <li className="p-6 text-center text-[#ff7a90]">{d.error}</li>}
-              {!d.error && !d.loading && !list.length && (
-                <li className="p-6 text-center text-[#77738a]">{d.sessions.length ? "No sessions match." : "No sessions yet. Run nebula sync on a device."}</li>
-              )}
-              <AnimatePresence initial={false} mode="popLayout">
-              {list.map((s, i) => {
-                const on = current?.key === s.key;
-                return (
-                  <motion.li
-                    key={s.key}
-                    id={`row-${s.key}`}
-                    layout="position"
-                    {...stagger(i)}
-                    exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.12 } }}
-                  >
-                    <button
-                      onClick={() => setSelected(s.key)}
-                      className={`relative w-full rounded-lg px-3 py-2.5 text-left transition-colors ${on ? "" : "hover:bg-white/[0.035]"}`}
-                    >
-                      {on && (
-                        <motion.span
-                          layoutId="session-active"
-                          className="absolute inset-0 rounded-lg bg-[#7c5cff]/[0.14] shadow-[inset_0_0_0_1px_rgba(124,92,255,0.35)]"
-                        />
-                      )}
-                      <span className="relative block">
-                      <div className="flex items-start justify-between gap-3">
-                        <span className={`line-clamp-2 leading-snug ${on ? "text-white" : "text-[#d9d6e4]"}`}>{sessionTitle(s)}</span>
-                        <span className="tabular shrink-0 pt-0.5 text-[11px] text-[#77738a]">{fmt.ago(s.latest.stored_at)}</span>
-                      </div>
-                      <div className="mt-1 flex items-center gap-2 text-xs text-[#77738a]">
-                        <span className="truncate">{s.projectName}</span>
-                        {s.revisions.length > 1 && <span className="rounded bg-white/[0.06] px-1.5 py-px font-geist-mono text-[10px] text-[#a19db3]">{s.revisions.length} revs</span>}
-                      </div>
-                      </span>
-                    </button>
-                  </motion.li>
-                );
-              })}
-              </AnimatePresence>
-            </ul>
-            </LayoutGroup>
-          </section>
+              <LayoutGroup id="sessions">
+                <ul className="scroll-thin mt-3 flex-1 overflow-y-auto px-2 pb-4">
+                  {d.error && <li className="px-3 py-10 text-center text-[#ff9fbf]">{d.error}</li>}
+                  {!d.error && d.loading && !d.sessions.length &&
+                    Array.from({ length: 6 }, (_, i) => (
+                      <li key={i} className="space-y-2 py-3 pr-3 pl-4" aria-hidden>
+                        <div className="h-3 w-4/5 animate-pulse rounded bg-white/[0.06]" />
+                        <div className="h-2.5 w-1/3 animate-pulse rounded bg-white/[0.04]" />
+                      </li>
+                    ))}
+                  {!d.error && !d.loading && !list.length && (
+                    <li className="px-3 py-10 text-center leading-relaxed text-[#8b84ad]">
+                      {d.sessions.length ? "No sessions match." : <>No sessions yet. Run <code className="font-geist-mono text-[#c9c2e6]">nebula sync</code> on a device.</>}
+                    </li>
+                  )}
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {list.map((s, i) => {
+                      const on = current?.key === s.key;
+                      return (
+                        <motion.li key={s.key} id={`row-${s.key}`} layout="position" {...stagger(i)} exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.12 } }}>
+                          <button
+                            onClick={() => setSelected(s.key)}
+                            className={`relative w-full rounded-lg py-2.5 pr-3 pl-4 text-left transition-colors ${on ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"}`}
+                          >
+                            {on && <motion.span layoutId="session-active" className="edge absolute top-2.5 bottom-2.5 left-0 w-[3px] rounded-full" />}
+                            <span className={`line-clamp-2 leading-snug ${on ? "text-white" : "text-[#c9c2e6]"}`}>{sessionTitle(s)}</span>
+                            <span className="tabular mt-1 block truncate text-xs text-[#8b84ad]">
+                              {s.projectName}, {fmt.ago(s.latest.stored_at)}
+                              {s.revisions.length > 1 && `, ${s.revisions.length} revisions`}
+                            </span>
+                          </button>
+                        </motion.li>
+                      );
+                    })}
+                  </AnimatePresence>
+                </ul>
+              </LayoutGroup>
+            </section>
 
-          <main className="relative min-w-0 flex-1">
-            <AnimatePresence mode="wait" initial={false}>
-              {current ? (
-                <motion.div key={current.key} {...fade} className="h-full">
-                  <Detail session={current} />
-                </motion.div>
-              ) : (
-                <motion.div key="none" {...fade} className="grid h-full place-items-center text-[#5f5b72]">
-                  Select a session
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </main>
-        </motion.div>
-      )}
+            <main className="relative min-w-0 flex-1">
+              <AnimatePresence mode="wait" initial={false}>
+                {current ? (
+                  <motion.div key={current.key} {...fade} className="h-full">
+                    <Detail session={current} />
+                  </motion.div>
+                ) : (
+                  <motion.div key="none" {...fade} className="grid h-full place-items-center text-[#8b84ad]">
+                    Select a session
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </main>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );
 }
 
-function NavGroup({ title, children }: { title: string; children: React.ReactNode }) {
+function Rail({ label, on, onClick, icon, fresh }: { label: string; on: boolean; onClick: () => void; icon: React.ReactNode; fresh?: boolean }) {
   return (
-    <div>
-      <div className="px-2 pb-1.5 text-[11px] font-medium text-[#5f5b72]">{title}</div>
-      <div className="space-y-px">{children}</div>
-    </div>
-  );
-}
-
-function NavItem({ label, count, active, onClick, mono, badge }: { label: string; count: number; active: boolean; onClick: () => void; mono?: boolean; badge?: string }) {
-  return (
-    <button onClick={onClick} className={`relative flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors ${active ? "text-white" : "text-[#a19db3] hover:bg-white/[0.04] hover:text-[#e8e6f0]"}`}>
-      {active && <motion.span layoutId="nav-active" className="absolute inset-0 rounded-md bg-white/[0.07]" />}
-      <span className={`relative truncate ${mono ? "font-geist-mono text-xs" : ""}`}>{label}</span>
-      <span className="relative flex items-center gap-1.5">
-        <AnimatePresence>
-          {badge && (
-            <motion.span key="badge" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} className="rounded bg-[#7c5cff]/20 px-1.5 py-px text-[10px] font-medium text-[#c7b9ff]">
-              {badge}
-            </motion.span>
-          )}
-        </AnimatePresence>
-        <span className="tabular text-xs text-[#5f5b72]">{count}</span>
-      </span>
+    <button onClick={onClick} aria-label={label} title={label} className={`relative grid size-10 place-items-center rounded-xl transition-colors ${on ? "text-white" : "text-[#8b84ad] hover:text-white"}`}>
+      {on && <motion.span layoutId="rail-active" className="absolute inset-0 rounded-xl bg-[#a98bff]/[0.16] ring-1 ring-[#a98bff]/30" />}
+      <span className="relative">{icon}</span>
+      <AnimatePresence>
+        {fresh && <motion.span key="fresh" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} className="absolute top-2 right-2 size-2 rounded-full bg-[#ffc9dc]" />}
+      </AnimatePresence>
     </button>
   );
 }
@@ -242,136 +227,150 @@ function Detail({ session }: { session: Session }) {
   const t = data?.transcript;
   const cmd = restoreCommand(session, revision);
   const files = data ? Object.entries(data.record.bundle.files).map(([n, b]) => [n, Math.floor((b.length * 3) / 4)] as const) : [];
+  const meta = [
+    ["Model", t?.model],
+    ["Branch", t?.branch],
+    ["Duration", fmt.duration(t?.started, t?.ended)],
+    ["Cost", t?.costUSD !== undefined ? `$${t.costUSD.toFixed(2)}` : ""],
+    ["Device", fmt.short(session.deviceId)],
+  ].filter(([, v]) => v);
+  const counts = { transcript: t ? t.prompts + t.replies : "", revisions: session.revisions.length, files: files.length || "" };
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="border-b border-white/[0.06] px-8 pt-5">
-        <div className="flex items-center gap-1.5 text-xs text-[#77738a]">
+    <div className="scroll-thin h-full overflow-y-auto">
+      <div className="mx-auto max-w-[760px] px-10 pt-12 pb-24">
+        <p className="flex gap-1.5 text-xs text-[#8b84ad]">
           <span className="truncate">{t?.cwd ?? session.projectPath}</span>
           <span>/</span>
           <span className="font-geist-mono">{fmt.short(session.sessionId)}</span>
-        </div>
-        <div className="mt-2 flex items-start justify-between gap-6">
-          <h2 className="text-xl leading-snug font-medium tracking-tight">{sessionTitle(session, t)}</h2>
-          <div className="flex shrink-0 gap-2">
-            <button onClick={() => copy(cmd)} className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-[#d9d6e4] hover:bg-white/5">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.span key={copied === cmd ? "copied" : "copy"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.12 }} className="block">
-                  {copied === cmd ? "Copied ✓" : "Copy restore command"}
-                </motion.span>
-              </AnimatePresence>
-            </button>
-            <button disabled={!data} onClick={() => data && downloadTranscript(data.record.bundle.files, session.sessionId)} className="rounded-md bg-[#7c5cff] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#8a6dff] disabled:opacity-40">
-              Download
-            </button>
-          </div>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#77738a]">
-          {t?.model && <Meta k="Model" v={t.model} />}
-          {t?.branch && <Meta k="Branch" v={t.branch} mono />}
-          {fmt.duration(t?.started, t?.ended) && <Meta k="Duration" v={fmt.duration(t?.started, t?.ended)} />}
-          {t?.costUSD !== undefined && <Meta k="Cost" v={`$${t.costUSD.toFixed(2)}`} />}
-          <Meta k="Device" v={fmt.short(session.deviceId)} mono />
-        </div>
-        <nav className="mt-4 flex gap-5">
-          {(["transcript", "revisions", "files"] as const).map((k) => (
-            <button key={k} onClick={() => setTab(k)} className={`relative pb-2.5 capitalize transition-colors ${tab === k ? "text-white" : "text-[#77738a] hover:text-[#d9d6e4]"}`}>
-              {tab === k && <motion.span layoutId="tab-underline" className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-[#7c5cff]" />}
-              {k}
-              <span className="ml-1.5 text-[11px] text-[#5f5b72]">{k === "transcript" ? (t ? t.prompts + t.replies : "") : k === "revisions" ? session.revisions.length : files.length || ""}</span>
-            </button>
+        </p>
+        <h2 title={sessionTitle(session, t)} className="mt-3 line-clamp-3 text-[26px] leading-[1.2] font-semibold tracking-tight text-white">{sessionTitle(session, t)}</h2>
+        <dl className="mt-5 flex flex-wrap gap-x-10 gap-y-3 text-xs">
+          {meta.map(([k, v]) => (
+            <div key={k} className="min-w-0">
+              <dt className="text-[#8b84ad]">{k}</dt>
+              <dd className={`mt-0.5 truncate text-[#e9e5fa] ${k === "Branch" || k === "Device" ? "font-geist-mono" : ""}`}>{v}</dd>
+            </div>
           ))}
-        </nav>
-      </header>
-
-      <div className="scroll-thin flex-1 overflow-y-auto">
-        <AnimatePresence mode="wait" initial={false}>
-        <motion.div key={`${tab}-${revision}`} {...fade}>
-        {loading && <p className="p-8 text-[#77738a]">Loading transcript…</p>}
-        {error && <p className="p-8 text-[#ff7a90]">{error}</p>}
-
-        {tab === "transcript" && t && (
-          <ol className="mx-auto max-w-[760px] space-y-5 px-8 py-8">
-            {!t.entries.length && <li className="text-[#77738a]">No conversation records in this revision.</li>}
-            {t.entries.map((e, i) =>
-              e.kind === "tool" ? (
-                <motion.li key={i} {...stagger(i)} className="-mt-3 flex items-center gap-2 pl-9 text-xs text-[#77738a]">
-                  <span className="rounded border border-white/[0.07] bg-[#14121c] px-1.5 py-0.5 font-geist-mono text-[11px] text-[#a19db3]">{e.name}</span>
-                  <span className="truncate">{e.summary}</span>
-                </motion.li>
-              ) : (
-                <motion.li key={i} {...stagger(i)} className="flex gap-3">
-                  <span className={`mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${e.kind === "prompt" ? "bg-[#7c5cff] text-white" : "bg-white/[0.08] text-[#a19db3]"}`}>
-                    {e.kind === "prompt" ? "Y" : "C"}
-                  </span>
-                  <div className={`min-w-0 flex-1 ${e.kind === "prompt" ? "rounded-lg border border-[#7c5cff]/25 bg-[#7c5cff]/[0.07] px-4 py-3" : "pt-0.5"}`}>
-                    <div className="mb-1 flex items-baseline gap-2 text-xs">
-                      <span className="font-medium text-[#d9d6e4]">{e.kind === "prompt" ? "You" : "Claude"}</span>
-                      <span className="text-[#5f5b72]">{fmt.time(e.time)}</span>
-                    </div>
-                    <Prose
-                      text={e.text}
-                      className="space-y-2.5 text-[13.5px] leading-relaxed text-[#cfccdb]"
-                      code="scroll-thin overflow-x-auto rounded-md border border-white/[0.06] bg-[#0a0910] p-3 font-geist-mono text-xs leading-relaxed text-[#d9d6e4]"
-                      inline="rounded bg-white/[0.07] px-1 py-px font-geist-mono text-[0.88em] text-[#e2dcff]"
-                    />
-                  </div>
-                </motion.li>
-              ),
-            )}
-          </ol>
-        )}
-
-        {tab === "revisions" && (
-          <table className="w-full text-left">
-            <thead className="text-[11px] text-[#5f5b72]">
-              <tr className="border-b border-white/[0.06]">
-                {["Revision", "Stored", "Size", "Files", ""].map((h) => (
-                  <th key={h} className="px-8 py-2.5 font-medium">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {session.revisions.map((r, i) => (
-                <tr key={r.revision} className={`border-b border-white/[0.04] ${r.revision === revision ? "bg-[#7c5cff]/[0.08]" : ""}`}>
-                  <td className="px-8 py-3 font-geist-mono text-xs">{r.revision.slice(0, 12)}{i === 0 && <span className="ml-2 rounded bg-[#5ad19a]/15 px-1.5 py-px font-geist text-[10px] text-[#7fe0b2]">latest</span>}</td>
-                  <td className="px-8 py-3 text-[#a19db3]">{new Date(r.stored_at).toLocaleString()}</td>
-                  <td className="tabular px-8 py-3 text-[#a19db3]">{fmt.bytes(r.bytes)}</td>
-                  <td className="tabular px-8 py-3 text-[#a19db3]">{r.file_count}</td>
-                  <td className="px-8 py-3 text-right">
-                    {r.revision === revision ? (
-                      <span className="text-xs text-[#a18bff]">Viewing</span>
-                    ) : (
-                      <button onClick={() => { setRevision(r.revision); setTab("transcript"); }} className="text-xs text-[#a19db3] hover:text-white">View</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        {tab === "files" && (
-          <ul className="px-8 py-4">
-            {files.map(([name, size]) => (
-              <li key={name} className="flex justify-between border-b border-white/[0.04] py-2.5 font-geist-mono text-xs">
-                <span className="truncate text-[#d9d6e4]">{name}</span>
-                <span className="tabular text-[#77738a]">{fmt.bytes(size)}</span>
-              </li>
+        </dl>
+        <div className="mt-6 flex items-center gap-1 border-b border-white/[0.07] pb-3">
+          <LayoutGroup id="tabs">
+            {(["transcript", "revisions", "files"] as const).map((k) => (
+              <button key={k} onClick={() => setTab(k)} className={`relative rounded-lg px-3 py-1.5 capitalize transition-colors ${tab === k ? "text-white" : "text-[#8b84ad] hover:text-white"}`}>
+                {tab === k && <motion.span layoutId="tab-active" className="absolute inset-0 rounded-lg bg-white/[0.07]" />}
+                <span className="relative">
+                  {k}
+                  <span className="tabular ml-1.5 text-[11px] text-[#8b84ad]">{counts[k]}</span>
+                </span>
+              </button>
             ))}
-          </ul>
-        )}
-        </motion.div>
+          </LayoutGroup>
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={() => copy(cmd)}
+            aria-label="Copy restore command"
+            title={copied === cmd ? "Copied" : `Copy: ${cmd}`}
+            className="ml-auto grid size-8 place-items-center rounded-lg text-[#c9c2e6] hover:bg-white/[0.06] hover:text-white"
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.span key={copied === cmd ? "copied" : "copy"} initial={{ opacity: 0, scale: 0.7 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.7 }} transition={{ duration: 0.12 }}>
+                {copied === cmd ? <CheckIcon className="size-4 text-[#8fe3bb]" /> : <CopyIcon className="size-4" />}
+              </motion.span>
+            </AnimatePresence>
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            disabled={!data}
+            onClick={() => data && downloadTranscript(data.record.bundle.files, session.sessionId)}
+            className="flex items-center gap-1.5 rounded-lg bg-[#e9e3ff] px-3 py-1.5 text-xs font-medium text-[#1a1240] hover:bg-white disabled:opacity-40"
+          >
+            <DownloadSimpleIcon className="size-3.5" />
+            Download
+          </motion.button>
+        </div>
+
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div key={`${tab}-${revision}`} {...fade}>
+            {loading && (
+              <div className="mt-10 space-y-3" aria-label="Loading transcript">
+                {[90, 75, 82, 40].map((w, i) => (
+                  <div key={i} className="h-3.5 animate-pulse rounded bg-white/[0.06]" style={{ width: `${w}%` }} />
+                ))}
+              </div>
+            )}
+            {error && <p className="mt-10 text-[#ff9fbf]">{error}</p>}
+
+            {tab === "transcript" && t && (
+              <ol className="mt-10 space-y-5">
+                {!t.entries.length && <li className="text-[#8b84ad]">No conversation records in this revision.</li>}
+                {t.entries.map((e, i) =>
+                  e.kind === "tool" ? (
+                    <motion.li key={i} {...stagger(i)} className="truncate font-geist-mono text-xs text-[#8b84ad]">
+                      <span className="text-[#c9b8ff]">{e.name}</span> {e.summary}
+                    </motion.li>
+                  ) : e.kind === "prompt" ? (
+                    <motion.li key={i} {...stagger(i)} className="relative pt-3 pl-6">
+                      <span className="edge absolute top-3 bottom-1 left-0 w-[3px] rounded-full" />
+                      <div className="mb-1.5 text-xs text-[#8b84ad]">You{e.time && `, ${fmt.time(e.time)}`}</div>
+                      <Prose
+                        text={e.text}
+                        className="space-y-3 text-[18px] leading-[1.55] font-medium tracking-tight text-white"
+                        code="scroll-thin overflow-x-auto rounded-lg bg-[#141128] p-4 font-geist-mono text-xs font-normal leading-relaxed tracking-normal"
+                        inline="rounded bg-white/[0.08] px-1 font-geist-mono text-[0.85em]"
+                      />
+                    </motion.li>
+                  ) : (
+                    <motion.li key={i} {...stagger(i)}>
+                      <Prose
+                        text={e.text}
+                        className="space-y-3.5 text-[15px] leading-7 text-[#cfc9e6]"
+                        code="scroll-thin overflow-x-auto rounded-lg border border-white/[0.06] bg-[#141128] p-4 font-geist-mono text-xs leading-relaxed text-[#e9e5fa]"
+                        inline="rounded bg-white/[0.07] px-1.5 py-px font-geist-mono text-[0.85em] text-[#e2dbff]"
+                      />
+                    </motion.li>
+                  ),
+                )}
+              </ol>
+            )}
+
+            {tab === "revisions" && (
+              <ol className="mt-6">
+                {session.revisions.map((r, i) => {
+                  const viewing = r.revision === revision;
+                  return (
+                    <li key={r.revision} className="flex items-center gap-4 py-2.5">
+                      <span className={`size-2 shrink-0 rounded-full ${viewing ? "edge" : "bg-white/20"}`} />
+                      <span className="font-geist-mono text-xs">{r.revision.slice(0, 12)}</span>
+                      {i === 0 && <span className="rounded-md border border-white/10 px-1.5 py-px text-[10px] text-[#c9c2e6]">Latest</span>}
+                      <span className="ml-auto text-xs text-[#8b84ad]" title={new Date(r.stored_at).toLocaleString()}>{fmt.ago(r.stored_at)}</span>
+                      <span className="tabular w-16 text-right text-xs text-[#c9c2e6]">{fmt.bytes(r.bytes)}</span>
+                      <span className="tabular w-14 text-right text-xs text-[#8b84ad]">{r.file_count} {r.file_count === 1 ? "file" : "files"}</span>
+                      {viewing ? (
+                        <span className="w-14 text-right text-xs text-[#c9b8ff]">Viewing</span>
+                      ) : (
+                        <button onClick={() => { setRevision(r.revision); setTab("transcript"); }} className="w-14 text-right text-xs text-[#c9c2e6] hover:text-white">
+                          View
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+
+            {tab === "files" && (
+              <ul className="mt-6 space-y-2.5 font-geist-mono text-xs">
+                {files.map(([name, size]) => (
+                  <li key={name} className="flex justify-between gap-6">
+                    <span className="truncate text-[#e9e5fa]">{name}</span>
+                    <span className="tabular text-[#8b84ad]">{fmt.bytes(size)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </motion.div>
         </AnimatePresence>
       </div>
     </div>
-  );
-}
-
-function Meta({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
-  return (
-    <span>
-      {k} <span className={`text-[#d9d6e4] ${mono ? "font-geist-mono" : ""}`}>{v}</span>
-    </span>
   );
 }

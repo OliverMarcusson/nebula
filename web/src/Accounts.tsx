@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import { ArrowSquareOutIcon, CaretDownIcon, CaretUpIcon, CheckIcon, ClockIcon, PlusIcon, WarningIcon, XIcon } from "@phosphor-icons/react";
 import type { Account, Device, Limit, SignIn } from "./api";
 import { api, isShared, SHARED_DEVICE } from "./api";
 import type { Dashboard } from "./hooks";
@@ -24,7 +25,7 @@ function limitLabel(l: Limit) {
   if (l.kind === "session") return "Session";
   if (l.kind === "weekly_all") return "Weekly";
   const rest = l.kind.replace(/^weekly_/, "");
-  return l.kind.startsWith("weekly_") ? `Weekly · ${rest[0].toUpperCase()}${rest.slice(1)}` : l.kind.replace(/_/g, " ");
+  return l.kind.startsWith("weekly_") ? `Weekly, ${rest[0].toUpperCase()}${rest.slice(1)}` : l.kind.replace(/_/g, " ");
 }
 
 function until(iso?: string) {
@@ -35,6 +36,9 @@ function until(iso?: string) {
   if (m < 48 * 60) return `resets in ${Math.floor(m / 60)}h ${m % 60}m`;
   return `resets ${new Date(iso).toLocaleDateString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`;
 }
+
+const primary = "rounded-lg bg-[#e9e3ff] font-medium text-[#1a1240] hover:bg-white disabled:opacity-40";
+const quiet = "rounded-lg border border-white/10 text-[#c9c2e6] hover:bg-white/[0.05] hover:text-white";
 
 export default function Accounts(d: Dashboard) {
   const [adding, setAdding] = useState(false);
@@ -50,81 +54,74 @@ export default function Accounts(d: Dashboard) {
   return (
     <div className="scroll-thin h-full overflow-y-auto">
       <LayoutGroup id="accounts">
-      <div className="mx-auto max-w-[920px] px-10 pt-10 pb-24">
-        <header className="flex items-start justify-between gap-6">
-          <h1 className="text-xl font-medium tracking-tight">Claude accounts</h1>
-          <motion.button layout whileTap={{ scale: 0.96 }} onClick={() => setAdding((v) => !v)} className="shrink-0 rounded-md bg-[#7c5cff] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#8a6dff]">
-            {adding ? "Close" : "Add account"}
-          </motion.button>
-        </header>
+        <div className="mx-auto max-w-[820px] px-10 pt-12 pb-24">
+          <header className="flex items-end justify-between gap-6">
+            <h1 className="text-[30px] leading-none font-semibold tracking-tight text-white">Claude accounts</h1>
+            <motion.button layout whileTap={{ scale: 0.96 }} onClick={() => setAdding((v) => !v)} className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs ${adding ? quiet : primary}`}>
+              {adding ? <XIcon className="size-3.5" /> : <PlusIcon className="size-3.5" weight="bold" />}
+              {adding ? "Close" : "Add account"}
+            </motion.button>
+          </header>
 
-        <motion.div layout="position" className="mt-6 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.06] text-xs">
-          <Capability on title="Usage" />
-          <Capability on title="Automatic switching" />
-          <Capability title="Usage resets" />
-        </motion.div>
+          <motion.ul layout="position" className="mt-5 flex flex-wrap gap-x-6 gap-y-1 text-xs text-[#8b84ad]">
+            <Capability on title="Usage" />
+            <Capability on title="Automatic switching" />
+            <Capability title="Usage resets" />
+          </motion.ul>
 
-        <AnimatePresence initial={false}>
-          {adding && (
-            <motion.div
-              key="add"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.28, ease }}
-              className="overflow-hidden"
-            >
-              <AddAccount
-                onDone={() => {
-                  setAdding(false);
-                  d.mutateAccounts(() => api.accounts());
-                }}
-              />
-            </motion.div>
-          )}
-          {d.error && (
-            <motion.p key="error" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 rounded-md border border-[#ff7a90]/30 bg-[#ff7a90]/[0.06] px-4 py-2.5 text-[13px] text-[#ff9aab]">
-              {d.error}
-            </motion.p>
-          )}
-        </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {adding && (
+              <motion.div key="add" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.28, ease }} className="overflow-hidden">
+                <AddAccount
+                  onDone={() => {
+                    setAdding(false);
+                    d.mutateAccounts(() => api.accounts());
+                  }}
+                />
+              </motion.div>
+            )}
+            {d.error && (
+              <motion.p key="error" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 rounded-lg border border-[#ff9fbf]/30 bg-[#ff9fbf]/[0.06] px-4 py-2.5 text-[13px] text-[#ffb8cf]">
+                {d.error}
+              </motion.p>
+            )}
+          </AnimatePresence>
 
-        <Section title="Connected" count={connected.length}>
-          {connected.length === 0 && <Empty key="empty">No connected accounts</Empty>}
-          {connected.map((a, i) => (
-            <AccountRow key={a.id} index={i} account={a}>
-              <div className="flex items-center gap-3">
-                <Toggle checked={a.enabled} onChange={(v) => d.mutateAccounts(() => api.setEnabled(a.id, v))} label="Use for automatic switching" />
-                <div className="flex flex-col">
-                  <IconButton disabled={i === 0} onClick={() => move(i, -1)} label="Move up" path="M4 10l4-4 4 4" />
-                  <IconButton disabled={i === connected.length - 1} onClick={() => move(i, 1)} label="Move down" path="M4 6l4 4 4-4" />
+          <Section title="Connected" count={connected.length}>
+            {connected.length === 0 && <Empty key="empty">No connected accounts. Add one above, or connect one detected on a device.</Empty>}
+            {connected.map((a, i) => (
+              <AccountRow key={a.id} index={i} account={a}>
+                <div className="flex items-center gap-3">
+                  <Toggle checked={a.enabled} onChange={(v) => d.mutateAccounts(() => api.setEnabled(a.id, v))} label="Use for automatic switching" />
+                  <div className="flex flex-col">
+                    <IconButton disabled={i === 0} onClick={() => move(i, -1)} label="Move up" icon={<CaretUpIcon className="size-3" weight="bold" />} />
+                    <IconButton disabled={i === connected.length - 1} onClick={() => move(i, 1)} label="Move down" icon={<CaretDownIcon className="size-3" weight="bold" />} />
+                  </div>
+                  <Disconnect shared={isShared(a)} onConfirm={() => d.mutateAccounts(() => api.disconnect(a.id))} />
                 </div>
-                <Disconnect shared={isShared(a)} onConfirm={() => d.mutateAccounts(() => api.disconnect(a.id))} />
-              </div>
-            </AccountRow>
-          ))}
-        </Section>
+              </AccountRow>
+            ))}
+          </Section>
 
-        <AnimatePresence initial={false}>
-          {(detected.length > 0 || d.accounts.length === 0) && (
-            <Section key="detected" title="Detected on your devices" count={detected.length}>
-              {d.accounts.length === 0 && <Empty key="empty">No accounts detected</Empty>}
-              {detected.map((a, i) => (
-                <AccountRow key={a.id} index={i} account={a}>
-                  <motion.button
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.96 }}
-                    onClick={() => d.mutateAccounts(() => api.connect(a.id))}
-                    className="rounded-md border border-[#7c5cff]/50 bg-[#7c5cff]/10 px-3 py-1.5 text-xs font-medium text-[#d6ccff] hover:bg-[#7c5cff]/20"
-                  >
-                    Connect
-                  </motion.button>
-                </AccountRow>
-              ))}
-            </Section>
-          )}
-        </AnimatePresence>
-      </div>
+          <AnimatePresence initial={false}>
+            {(detected.length > 0 || d.accounts.length === 0) && (
+              <Section key="detected" title="Detected on your devices" count={detected.length}>
+                {d.accounts.length === 0 && <Empty key="empty">No accounts detected. Sign in to Claude Code on a device running nebula sync.</Empty>}
+                {detected.map((a, i) => (
+                  <AccountRow key={a.id} index={i} account={a}>
+                    <motion.button
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => d.mutateAccounts(() => api.connect(a.id))}
+                      className="rounded-lg px-3 py-1.5 text-xs font-medium text-[#c9b8ff] ring-1 ring-[#a98bff]/40 hover:bg-[#a98bff]/10"
+                    >
+                      Connect
+                    </motion.button>
+                  </AccountRow>
+                ))}
+              </Section>
+            )}
+          </AnimatePresence>
+        </div>
       </LayoutGroup>
     </div>
   );
@@ -132,28 +129,26 @@ export default function Accounts(d: Dashboard) {
 
 function Capability({ title, on }: { title: string; on?: boolean }) {
   return (
-    <div className="bg-[#100f17] px-4 py-3">
-      <div className="flex items-center gap-2 font-medium text-[#d9d6e4]">
-        <span className={`size-1.5 rounded-full ${on ? "bg-[#5ad19a]" : "bg-[#5f5b72]"}`} />
-        {title}
-        <span className={`ml-auto text-[10px] font-normal ${on ? "text-[#7fe0b2]" : "text-[#77738a]"}`}>{on ? "Live" : "Planned"}</span>
-      </div>
-    </div>
+    <li className="flex items-center gap-1.5">
+      {on ? <CheckIcon className="size-3.5 text-[#8fe3bb]" weight="bold" /> : <ClockIcon className="size-3.5" />}
+      <span className={on ? "text-[#c9c2e6]" : ""}>{title}</span>
+      <span>{on ? "live" : "planned"}</span>
+    </li>
   );
 }
 
 function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
   return (
-    <motion.section layout="position" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-10">
-      <h2 className="mb-3 flex items-baseline gap-2 text-[13px] font-medium text-[#a19db3]">
+    <motion.section layout="position" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-12">
+      <h2 className="mb-6 flex items-baseline gap-2 border-b border-white/[0.07] pb-3 text-sm font-medium text-white">
         {title}
         <AnimatePresence mode="popLayout" initial={false}>
-          <motion.span key={count} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="tabular text-xs text-[#5f5b72]">
+          <motion.span key={count} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="tabular text-xs font-normal text-[#8b84ad]">
             {count}
           </motion.span>
         </AnimatePresence>
       </h2>
-      <div className="space-y-2">
+      <div className="space-y-10">
         <AnimatePresence initial={false} mode="popLayout">
           {children}
         </AnimatePresence>
@@ -163,7 +158,20 @@ function Section({ title, count, children }: { title: string; count: number; chi
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <motion.p layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="rounded-lg border border-dashed border-white/[0.08] px-5 py-6 text-center text-[13px] leading-relaxed text-[#77738a]">{children}</motion.p>;
+  return (
+    <motion.p layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[13px] leading-relaxed text-[#8b84ad]">
+      {children}
+    </motion.p>
+  );
+}
+
+function Tag({ children, tone = "plain" }: { children: React.ReactNode; tone?: "plain" | "shared" | "limited" }) {
+  const tones = {
+    plain: "border-white/10 text-[#c9c2e6]",
+    shared: "border-[#8fe3bb]/30 text-[#8fe3bb]",
+    limited: "border-[#ffc9dc]/40 text-[#ffc9dc]",
+  };
+  return <span className={`rounded-md border px-1.5 py-px text-[10px] ${tones[tone]}`}>{children}</span>;
 }
 
 function AccountRow({ account: a, index, children }: { account: Account; index: number; children: React.ReactNode }) {
@@ -173,109 +181,104 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
   const shared = isShared(a);
   const devices = a.sightings.filter((s) => s.device_id !== SHARED_DEVICE);
   const source = (id: string) => (id === SHARED_DEVICE ? "server" : fmt.short(id));
+  const connected = a.state === "connected";
   return (
     <motion.article
       layout
       layoutId={`account-${a.id}`}
       {...stagger(index)}
       exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
-      className="rounded-lg border border-white/[0.07] bg-[#14121c] px-5 py-4"
+      className="grid grid-cols-[2.5rem_1fr] gap-x-4"
     >
-      <div className="flex items-center gap-4">
-        {a.state === "connected" && <span className="tabular w-4 text-center font-geist-mono text-xs text-[#5f5b72]">{a.priority}</span>}
-        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#3b2d78] to-[#211a40] text-sm font-medium text-[#d6ccff] ring-1 ring-white/10">
-          {name[0]?.toUpperCase()}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate font-medium text-[#ecebf3]">{name}</span>
-            {p && <span className="rounded bg-[#7c5cff]/15 px-1.5 py-px text-[10px] font-medium text-[#c7b9ff]">{p}</span>}
-            {shared && <span className="rounded bg-[#5ad19a]/12 px-1.5 py-px text-[10px] font-medium text-[#8fe3bb]">All devices</span>}
-            {a.state === "connected" && !a.enabled && <span className="rounded bg-white/[0.06] px-1.5 py-px text-[10px] text-[#a19db3]">Paused</span>}
-            {a.limited_until && Date.parse(a.limited_until) > Date.now() && (
-              <span className="rounded bg-[#e0a43a]/15 px-1.5 py-px text-[10px] font-medium text-[#f0c070]">
-                Limited until {new Date(a.limited_until).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}
-              </span>
-            )}
+      <span className="tabular pt-0.5 text-2xl leading-none font-semibold text-white/25">{connected ? a.priority : ""}</span>
+      <div className="min-w-0">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-[15px] font-medium text-white">{name}</span>
+              {p && <Tag>{p}</Tag>}
+              {shared && <Tag tone="shared">All devices</Tag>}
+              {connected && !a.enabled && <Tag>Paused</Tag>}
+              {a.limited_until && Date.parse(a.limited_until) > Date.now() && (
+                <Tag tone="limited">Limited until {new Date(a.limited_until).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}</Tag>
+              )}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-[#8b84ad]">
+              {a.display_name && a.email ? `${a.email}, ` : ""}
+              {shared
+                ? `shared from the server, on ${devices.length} ${devices.length === 1 ? "device" : "devices"}`
+                : a.sightings.length
+                  ? `signed in on ${a.sightings.map((s) => `${fmt.short(s.device_id)} (${s.profile})`).join(", ")}, reported ${fmt.ago(a.sightings[0].reported_at)}`
+                  : "not signed in on any device"}
+            </div>
           </div>
-          <div className="mt-0.5 truncate text-xs text-[#77738a]">
-            {a.display_name && a.email ? `${a.email} · ` : ""}
-            {shared
-              ? `Shared from the server · on ${devices.length} ${devices.length === 1 ? "device" : "devices"}`
-              : a.sightings.length
-                ? `Signed in on ${a.sightings.map((s) => `${fmt.short(s.device_id)} (${s.profile})`).join(", ")} · reported ${fmt.ago(a.sightings[0].reported_at)}`
-                : "Not signed in on any device"}
-          </div>
+          {children}
         </div>
-        {children}
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-x-8 gap-y-3 border-t border-white/[0.05] pt-3.5 pl-[68px]">
         {a.usage?.limits.length ? (
           <>
-            {a.usage.limits.map((l) => (
-              <Meter key={l.kind} limit={l} stale={stale} />
-            ))}
-            <p className="col-span-2 text-[11px] text-[#5f5b72]">
-              {stale ? "Stale · " : ""}Usage as of {fmt.ago(a.usage.observed_at)} from {source(a.usage.device_id)}
+            <div className="mt-4 grid gap-x-8 gap-y-4 sm:grid-cols-2">
+              {a.usage.limits.map((l) => (
+                <Meter key={l.kind} limit={l} stale={stale} />
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-[#8b84ad]">
+              {stale ? "Stale. " : ""}Usage as of {fmt.ago(a.usage.observed_at)} from {source(a.usage.device_id)}
             </p>
           </>
         ) : (
-          <p className="col-span-2 text-xs text-[#5f5b72]">Usage unknown</p>
+          connected && <p className="mt-3 text-xs text-[#8b84ad]">Usage unknown</p>
         )}
       </div>
     </motion.article>
   );
 }
 
-const severity: Record<string, { bar: string; label: string }> = {
-  warning: { bar: "bg-[#e0a43a]", label: "Near limit" },
-  critical: { bar: "bg-[#ff6b81]", label: "At limit" },
-  exhausted: { bar: "bg-[#ff6b81]", label: "At limit" },
+const severity: Record<string, { bar: string; text: string; label: string }> = {
+  warning: { bar: "bg-[#ffc9dc]", text: "text-[#ffc9dc]", label: "Near limit" },
+  critical: { bar: "bg-[#ff9fbf]", text: "text-[#ff9fbf]", label: "At limit" },
+  exhausted: { bar: "bg-[#ff9fbf]", text: "text-[#ff9fbf]", label: "At limit" },
 };
 
 function Meter({ limit: l, stale }: { limit: Limit; stale: boolean }) {
-  const s = l.severity && severity[l.severity];
+  const s = l.severity ? severity[l.severity] : undefined;
   const pct = Math.min(100, Math.max(0, l.percent));
   return (
     <div>
       <div className="flex items-baseline justify-between text-xs">
-        <span className="text-[#d9d6e4]">
+        <span className="text-[#c9c2e6]">
           {limitLabel(l)}
           {s && (
-            <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-[#a19db3]">
-              <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden>
-                <path d="M8 2.5 14.5 13.5h-13z M8 6.5v3 M8 11.5v.01" />
-              </svg>
+            <span className={`ml-2 inline-flex items-center gap-1 text-[11px] ${s.text}`}>
+              <WarningIcon className="size-3" />
               {s.label}
             </span>
           )}
         </span>
-        <span className="tabular text-[#a19db3]">
-          <span className="text-[#ecebf3]">{Math.round(l.percent)}%</span> · {until(l.resets_at)}
-        </span>
+        <span className={`tabular text-sm font-medium ${stale ? "text-[#8b84ad]" : s ? s.text : "text-white"}`}>{Math.round(l.percent)}%</span>
       </div>
-      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.06]" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${limitLabel(l)} usage`}>
+      <div className="mt-1.5 h-[3px] rounded-full bg-white/[0.06]" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${limitLabel(l)} usage`}>
         <motion.div
-          className={`h-full rounded-full ${stale ? "bg-[#5f5b72]" : s ? s.bar : "bg-[#7c5cff]"}`}
+          className={`h-full rounded-full ${stale ? "bg-white/25" : s ? s.bar : "edge-x"}`}
           initial={{ width: 0 }}
           animate={{ width: `${pct}%` }}
           transition={{ duration: 0.7, ease, delay: 0.1 }}
         />
       </div>
+      <div className="mt-1 text-[11px] text-[#8b84ad]">{until(l.resets_at)}</div>
     </div>
   );
 }
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 text-xs text-[#a19db3]" title={label}>
+    <label className="flex cursor-pointer items-center gap-2 text-xs text-[#8b84ad]" title={label}>
       <span>Auto-switch</span>
       <button
         role="switch"
         aria-checked={checked}
         aria-label={label}
         onClick={() => onChange(!checked)}
-        className={`relative h-[18px] w-8 rounded-full transition-colors ${checked ? "bg-[#7c5cff]" : "bg-white/[0.12]"}`}
+        className={`relative h-[18px] w-8 rounded-full transition-colors ${checked ? "bg-[#a98bff]" : "bg-white/[0.12]"}`}
       >
         <motion.span className="absolute top-[2px] left-[2px] size-[14px] rounded-full bg-white shadow" animate={{ x: checked ? 14 : 0 }} />
       </button>
@@ -283,12 +286,10 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
-function IconButton({ path, label, onClick, disabled }: { path: string; label: string; onClick: () => void; disabled?: boolean }) {
+function IconButton({ icon, label, onClick, disabled }: { icon: React.ReactNode; label: string; onClick: () => void; disabled?: boolean }) {
   return (
-    <button onClick={onClick} disabled={disabled} aria-label={label} title={label} className="grid h-4 w-6 place-items-center rounded text-[#a19db3] hover:bg-white/[0.06] hover:text-white disabled:opacity-25 disabled:hover:bg-transparent">
-      <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d={path} />
-      </svg>
+    <button onClick={onClick} disabled={disabled} aria-label={label} title={label} className="grid h-4 w-6 place-items-center rounded text-[#8b84ad] hover:bg-white/[0.06] hover:text-white disabled:opacity-25 disabled:hover:bg-transparent">
+      {icon}
     </button>
   );
 }
@@ -304,11 +305,17 @@ function Disconnect({ shared, onConfirm }: { shared: boolean; onConfirm: () => v
   return (
     <AnimatePresence mode="wait" initial={false}>
       {asking ? (
-        <motion.button key="confirm" {...swap} onClick={onConfirm} className="rounded-md border border-[#ff7a90]/40 bg-[#ff7a90]/10 px-3 py-1.5 text-xs text-[#ffb3c0] hover:bg-[#ff7a90]/20" title={shared ? "Signs every device out of this account." : "Removes its priority and preferences. Devices stay signed in."}>
+        <motion.button
+          key="confirm"
+          {...swap}
+          onClick={onConfirm}
+          className="rounded-lg border border-[#ff9fbf]/40 bg-[#ff9fbf]/10 px-3 py-1.5 text-xs text-[#ffb8cf] hover:bg-[#ff9fbf]/20"
+          title={shared ? "Signs every device out of this account." : "Removes its priority and preferences. Devices stay signed in."}
+        >
           Confirm disconnect
         </motion.button>
       ) : (
-        <motion.button key="ask" {...swap} onClick={() => setAsking(true)} className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-[#a19db3] hover:bg-white/5 hover:text-white">
+        <motion.button key="ask" {...swap} onClick={() => setAsking(true)} className={`px-3 py-1.5 text-xs ${quiet}`}>
           Disconnect
         </motion.button>
       )}
@@ -385,24 +392,19 @@ function AddAccount({ onDone }: { onDone: () => void }) {
             <button
               key={d.id}
               onClick={() => setDevice(d.id)}
-              className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${device === d.id ? "border-[#7c5cff]/60 bg-[#7c5cff]/15 text-white" : "border-white/10 text-[#a19db3] hover:text-white"}`}
+              className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${device === d.id ? "border-[#a98bff]/60 bg-[#a98bff]/15 text-white" : "border-white/10 text-[#c9c2e6] hover:text-white"}`}
             >
               {d.name || fmt.short(d.id)}
             </button>
           ))}
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          disabled={!device}
-          onClick={() => device && run(() => api.startSignIn(device))}
-          className="ml-auto rounded-md bg-[#7c5cff] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#8a6dff] disabled:opacity-50"
-        >
+        <motion.button whileTap={{ scale: 0.97 }} disabled={!device} onClick={() => device && run(() => api.startSignIn(device))} className={`ml-auto px-4 py-2 text-[13px] ${primary}`}>
           Sign in with Claude{devices.length === 1 ? ` on ${name(device)}` : ""}
         </motion.button>
       </div>
     ) : (
-      <div className="space-y-2 text-[13px] text-[#a19db3]">
+      <div className="space-y-2 text-[13px] text-[#c9c2e6]">
         <p>No device online. Start the companion on the computer to sign in from:</p>
-        <pre className="rounded-md border border-white/[0.06] bg-[#0a0910] px-3 py-2 font-geist-mono text-xs text-[#d9d6e4]">nebula sync --watch</pre>
+        <pre className="rounded-lg border border-white/[0.06] bg-[#0c0a1d] px-3 py-2 font-geist-mono text-xs text-[#e9e5fa]">nebula sync --watch</pre>
       </div>
     );
   } else if (signIn.state === "pending" || signIn.state === "starting" || signIn.state === "completing") {
@@ -415,8 +417,9 @@ function AddAccount({ onDone }: { onDone: () => void }) {
         <div className="flex items-center justify-between gap-4">
           <Spinner label={everywhere ? "Sign in, then paste the code Claude shows" : `Waiting for sign-in on ${name(signIn.device_id)}`} />
           {signIn.url && (
-            <a href={signIn.url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded-md border border-white/10 px-3 py-1.5 text-xs text-[#d9d6e4] hover:bg-white/5">
-              Open sign-in page ↗
+            <a href={signIn.url} target="_blank" rel="noopener noreferrer" className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs ${quiet}`}>
+              Open sign-in page
+              <ArrowSquareOutIcon className="size-3.5" />
             </a>
           )}
         </div>
@@ -425,17 +428,19 @@ function AddAccount({ onDone }: { onDone: () => void }) {
             e.preventDefault();
             if (code.trim()) run(() => api.submitCode(signIn.id, code.trim()));
           }}
-          className="flex gap-2"
+          className="flex items-end gap-2"
         >
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Paste code"
-            autoComplete="off"
-            spellCheck={false}
-            className="min-w-0 flex-1 rounded-md border border-white/10 bg-[#0a0910] px-3 py-1.5 font-geist-mono text-xs outline-none focus:border-[#7c5cff] focus:ring-2 focus:ring-[#7c5cff]/20"
-          />
-          <button disabled={!code.trim()} className="rounded-md bg-[#7c5cff] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#8a6dff] disabled:opacity-40">
+          <label className="min-w-0 flex-1">
+            <span className="text-xs text-[#c9c2e6]">Code from Claude</span>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              className="mt-1.5 w-full rounded-lg border border-white/10 bg-[#0c0a1d] px-3 py-1.5 font-geist-mono text-xs outline-none focus:border-[#a98bff] focus:ring-2 focus:ring-[#a98bff]/20"
+            />
+          </label>
+          <button disabled={!code.trim()} className={`px-3 py-1.5 text-xs ${primary}`}>
             Connect
           </button>
         </form>
@@ -444,24 +449,24 @@ function AddAccount({ onDone }: { onDone: () => void }) {
   } else if (signIn.state === "completed") {
     key = "completed";
     body = (
-      <div className="flex items-center gap-2.5 text-[13px] text-[#d9d6e4]">
-        <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className="grid size-5 place-items-center rounded-full bg-[#5ad19a]/20 text-[#7fe0b2]">
-          ✓
+      <div className="flex items-center gap-2.5 text-[13px] text-[#e9e5fa]">
+        <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className="grid size-5 place-items-center rounded-full bg-[#8fe3bb]/20 text-[#8fe3bb]">
+          <CheckIcon className="size-3" weight="bold" />
         </motion.span>
-        {everywhere ? "Connected · reaching every device within a minute" : "Connected"}
+        {everywhere ? "Connected. Reaching every device within a minute." : "Connected"}
       </div>
     );
   } else {
     key = "failed";
     body = (
       <div className="flex items-center justify-between gap-4 text-[13px]">
-        <span className="text-[#ff9aab]">{signIn.message || "Sign-in did not complete"}</span>
+        <span className="text-[#ffb8cf]">{signIn.message || "Sign-in did not complete"}</span>
         <button
           onClick={() => {
             setCode("");
             setSignIn(undefined);
           }}
-          className="shrink-0 rounded-md border border-white/10 px-3 py-1.5 text-xs text-[#d9d6e4] hover:bg-white/5"
+          className={`shrink-0 px-3 py-1.5 text-xs ${quiet}`}
         >
           Try again
         </button>
@@ -470,11 +475,12 @@ function AddAccount({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <section className="mt-6 rounded-lg border border-[#7c5cff]/25 bg-[#7c5cff]/[0.05] p-5">
+    <section className="relative mt-6 overflow-hidden rounded-xl border border-white/[0.08] bg-[#141128]/70 p-5 pl-6">
+      <span className="edge absolute top-0 bottom-0 left-0 w-[3px]" />
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-medium">Connect a Claude account</h2>
+        <h2 className="text-sm font-medium text-white">Connect a Claude account</h2>
         {active && (
-          <button onClick={() => run(() => api.cancelSignIn(signIn.id))} className="text-xs text-[#a19db3] hover:text-white">
+          <button onClick={() => run(() => api.cancelSignIn(signIn.id))} className="text-xs text-[#8b84ad] hover:text-white">
             Cancel
           </button>
         )}
@@ -484,16 +490,16 @@ function AddAccount({ onDone }: { onDone: () => void }) {
           {body}
         </motion.div>
       </AnimatePresence>
-      {error && <p className="mt-3 text-xs text-[#ff9aab]">{error}</p>}
+      {error && <p className="mt-3 text-xs text-[#ffb8cf]">{error}</p>}
     </section>
   );
 }
 
 function Spinner({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-2.5 text-[13px] text-[#d9d6e4]">
+    <div className="flex items-center gap-2.5 text-[13px] text-[#e9e5fa]">
       <motion.span
-        className="size-3.5 rounded-full border-2 border-[#7c5cff]/30 border-t-[#a18bff]"
+        className="size-3.5 rounded-full border-2 border-[#a98bff]/30 border-t-[#c9b8ff]"
         animate={{ rotate: 360 }}
         transition={{ duration: 0.9, repeat: Infinity, ease: "linear" }}
       />
