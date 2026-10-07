@@ -25,7 +25,7 @@ function fakes(on: Parameters<Parameters<typeof test>[1]>[1], stdout: string) {
 
 test('the model switches accounts; the session hands over when its turn ends', async ($, on) => {
   const seen = fakes(on, 'Switching to cyber@example.com: this session resumes on it when the current turn ends.\n')
-  const r = await $.tool.call({ tool: 'mcp__nebula__switch_account', input: { account: 'cyber' } })
+  const r = await $.tool.call({ tool: 'mcp__nebula__switch_account', account: 'cyber' })
   expect(seen.argv).toEqual(['/opt/nebula/bin/nebula', 'switch', '--session', 'sess-1', 'cyber'])
   expect(seen.env.NEBULA_SWITCH_FILE).toBe(env.NEBULA_SWITCH_FILE)
   expect(String(r.result)).toContain('Switching to cyber@example.com')
@@ -36,7 +36,7 @@ test('the model switches accounts; the session hands over when its turn ends', a
 
 test('listing accounts runs the companion without arguments and never exits', async ($, on) => {
   const seen = fakes(on, 'a@example.com\n')
-  await $.tool.call({ tool: 'mcp__nebula__switch_account', input: {} })
+  await $.tool.call({ tool: 'mcp__nebula__switch_account' })
   expect(seen.argv).toEqual(['/opt/nebula/bin/nebula', 'switch'])
   await $.turn.complete({ turnId: 't1', reason: 'end_turn', answer: '', durationMs: 1, isAborted: false } as never)
   expect(seen.exited).toBe(false)
@@ -44,7 +44,7 @@ test('listing accounts runs the companion without arguments and never exits', as
 
 test('an account name that could be a flag is refused', async ($, on) => {
   const seen = fakes(on, '')
-  const r = await $.tool.call({ tool: 'mcp__nebula__switch_account', input: { account: '--session=x' } })
+  const r = await $.tool.call({ tool: 'mcp__nebula__switch_account', account: '--session=x' })
   expect(seen.argv).toEqual([])
   expect(String(r.result)).toContain('email')
 })

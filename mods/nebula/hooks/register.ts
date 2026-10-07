@@ -159,8 +159,8 @@ export function register(on: On) {
     return { text }
   })
   on('tool.call', { tool: 'mcp__nebula__switch_account' }, async ($, e) => {
-    const input = (e as { input?: { account?: unknown } }).input
-    const account = typeof input?.account === 'string' ? input.account.trim() : ''
+    // The model's arguments sit on the event itself, beside tool and tool_use_id.
+    const account = typeof e.account === 'string' ? e.account.trim() : ''
     return { result: await switchAccount($, state, account) }
   })
 
