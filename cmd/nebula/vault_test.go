@@ -126,6 +126,7 @@ func TestSyncShared(t *testing.T) {
 	}
 	const ownID = "99999999-2222-4333-8444-555555555555"
 	_ = os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"hasCompletedOnboarding":true,"oauthAccount":{"accountUuid":"`+ownID+`","emailAddress":"own@example.com"}}`), 0600)
+	_ = os.WriteFile(filepath.Join(home, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"mine","refreshToken":"rt","expiresAt":1}}`), 0600)
 
 	var mu sync.Mutex
 	serve := []vaultToken{}
@@ -215,6 +216,14 @@ func TestSyncShared(t *testing.T) {
 	sync()
 	if _, err := os.Stat(other); err == nil || len(shared()) != 0 {
 		t.Fatalf("not retired: %v", shared())
+	}
+
+	// A direct sign-in that ran out gets the shared token after all.
+	_ = os.WriteFile(filepath.Join(home, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"old","expiresAt":1}}`), 0600)
+	set(token(ownID, "own@example.com", "at-own", 8*time.Hour))
+	sync()
+	if shared()[ownID] == "" {
+		t.Fatal("expired direct sign-in not replaced by the shared account")
 	}
 }
 

@@ -72,7 +72,8 @@ func syncShared(ctx context.Context, c *client, list string) error {
 	for _, p := range profiles {
 		if id := sharedAccount(p.Dir); id != "" {
 			shared[id] = p.Dir
-		} else if q, err := accounts.ReadLocal(p.Name, p.ConfigFile); err == nil && q != nil {
+		} else if q, err := accounts.ReadLocal(p.Name, p.ConfigFile); err == nil && q != nil && usableToken(p) {
+			// A direct sign-in that ran out still needs the shared token.
 			own[q.AccountUUID] = true
 		}
 	}
