@@ -113,3 +113,20 @@ func TestLimitClearedByFreshReading(t *testing.T) {
 		t.Fatal("fresh reading with room did not clear the limit")
 	}
 }
+
+func TestParseGrants(t *testing.T) {
+	raw := []byte(`{"limits":[],"cedar_ember":{"eligible":true,"grants":[
+		{"id":"g_1","label":"Launch","resets_total":3,"resets_left":2,"ends_at":"2026-11-01T00:00:00Z","clears":["five_hour","seven_day"],"usable_now":true,"use_requires_limit":false},
+		{"id":"BAD ID","resets_left":1,"clears":[]},
+		{"id":"no_count","clears":[]}]}}`)
+	g := ParseGrants(raw)
+	if len(g) != 1 || g[0].ID != "g_1" || g[0].ResetsLeft != 2 || g[0].NeedsLimit || len(g[0].Clears) != 2 || g[0].EndsAt == nil {
+		t.Fatalf("grants: %+v", g)
+	}
+	if ParseGrants([]byte(`{"limits":[]}`)) != nil {
+		t.Fatal("no block should mean unknown, not none")
+	}
+	if g := ParseGrants([]byte(`{"cedar_ember":{"eligible":false}}`)); g == nil || len(g) != 0 {
+		t.Fatal("a block without grants means none")
+	}
+}

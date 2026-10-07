@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -89,6 +90,50 @@ func ParseUsage(raw []byte, observed time.Time) (*Usage, error) {
 		usage.Limits = append(usage.Limits, Limit{Kind: l.Kind, Group: l.Group, Percent: *l.Percent, Severity: l.Severity, ResetsAt: l.ResetsAt, Active: l.IsActive})
 	}
 	return usage, nil
+}
+
+// ParseGrants reads the reset offers in a usage response fetched with
+// ?cedar_ember=1. Malformed grants are skipped; no block yields nil.
+func ParseGrants(raw []byte) []Grant {
+	var body struct {
+		Block *struct {
+			Grants []json.RawMessage `json:"grants"`
+		} `json:"cedar_ember"`
+	}
+	if json.Unmarshal(raw, &body) != nil || body.Block == nil {
+		return nil
+	}
+	out := []Grant{}
+	for _, g := range body.Block.Grants {
+		var v struct {
+			ID               string     `json:"id"`
+			Label            string     `json:"label"`
+			ResetsTotal      int        `json:"resets_total"`
+			ResetsLeft       *int       `json:"resets_left"`
+			EndsAt           *time.Time `json:"ends_at"`
+			Clears           []string   `json:"clears"`
+			Paused           bool       `json:"paused"`
+			UsableNow        bool       `json:"usable_now"`
+			UseRequiresLimit *bool      `json:"use_requires_limit"`
+		}
+		if json.Unmarshal(g, &v) != nil || !GrantID.MatchString(v.ID) || v.ResetsLeft == nil || len(out) == 16 {
+			continue
+		}
+		if len(v.Label) > 128 {
+			v.Label = strings.ToValidUTF8(v.Label[:128], "")
+		}
+		clears := []string{}
+		for _, c := range v.Clears {
+			if len(c) <= 64 && len(clears) < 16 {
+				clears = append(clears, c)
+			}
+		}
+		out = append(out, Grant{
+			ID: v.ID, Label: v.Label, ResetsTotal: max(v.ResetsTotal, 0), ResetsLeft: max(*v.ResetsLeft, 0), EndsAt: v.EndsAt,
+			Clears: clears, Paused: v.Paused, UsableNow: v.UsableNow, NeedsLimit: v.UseRequiresLimit == nil || *v.UseRequiresLimit,
+		})
+	}
+	return out
 }
 
 // Exhausted reports whether a reading shows any limit used up and not yet reset.

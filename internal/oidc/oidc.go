@@ -214,17 +214,38 @@ func (p *Provider) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 
 // --- flow ------------------------------------------------------------------
 
+// Owner is the archive owner every signed-in user acts as.
+func (p *Provider) Owner() string { return p.cfg.Owner }
+
 // Start redirects to the provider with fresh state, nonce, and PKCE verifier,
 // remembered in a short-lived signed cookie.
 func (p *Provider) Start(w http.ResponseWriter, r *http.Request) {
-	d, err := p.meta(r.Context())
+	u, err := p.start(w, r, "")
 	if err != nil {
 		http.Error(w, "sign-in provider unavailable", 502)
 		return
 	}
+	http.Redirect(w, r, u, http.StatusFound)
+}
+
+// StepUp starts a sign-in that must be performed now, whatever session the
+// provider already has (prompt=login, max_age=0), bound to one action. The
+// callback returns the action only if the provider reports authentication
+// after this moment, and does not change the dashboard session. It returns
+// the provider URL for the dashboard to open.
+func (p *Provider) StepUp(w http.ResponseWriter, r *http.Request, action string) (string, error) {
+	return p.start(w, r, action)
+}
+
+func (p *Provider) start(w http.ResponseWriter, r *http.Request, action string) (string, error) {
+	d, err := p.meta(r.Context())
+	if err != nil {
+		return "", err
+	}
 	state, nonce, verifier := random(), random(), random()
-	exp := strconv.FormatInt(p.now().Add(flowTTL).Unix(), 10)
-	http.SetCookie(w, &http.Cookie{Name: flowCookie, Value: p.sign(state, nonce, verifier, exp), Path: "/auth/", MaxAge: int(flowTTL.Seconds()), HttpOnly: true, Secure: p.secure(), SameSite: http.SameSiteLaxMode})
+	now := p.now()
+	exp := strconv.FormatInt(now.Add(flowTTL).Unix(), 10)
+	http.SetCookie(w, &http.Cookie{Name: flowCookie, Value: p.sign(state, nonce, verifier, exp, action, strconv.FormatInt(now.Unix(), 10)), Path: "/auth/", MaxAge: int(flowTTL.Seconds()), HttpOnly: true, Secure: p.secure(), SameSite: http.SameSiteLaxMode})
 	sum := sha256.Sum256([]byte(verifier))
 	q := url.Values{
 		"response_type":         {"code"},
@@ -236,12 +257,17 @@ func (p *Provider) Start(w http.ResponseWriter, r *http.Request) {
 		"code_challenge":        {base64.RawURLEncoding.EncodeToString(sum[:])},
 		"code_challenge_method": {"S256"},
 	}
-	http.Redirect(w, r, d.Authorization+"?"+q.Encode(), http.StatusFound)
+	if action != "" {
+		q.Set("prompt", "login")
+		q.Set("max_age", "0")
+	}
+	return d.Authorization + "?" + q.Encode(), nil
 }
 
-// Callback finishes the flow and sets the session cookie. Failures return to
-// the dashboard with a short reason; details go to the error log only.
-func (p *Provider) Callback(w http.ResponseWriter, r *http.Request) (string, error) {
+// Callback finishes the flow. A plain sign-in sets the session cookie; a
+// step-up returns its action instead. Failures return to the dashboard with a
+// short reason; details go to the error log only.
+func (p *Provider) Callback(w http.ResponseWriter, r *http.Request) (action string, err error) {
 	fail := func(reason string, err error) (string, error) {
 		http.SetCookie(w, &http.Cookie{Name: flowCookie, Path: "/auth/", MaxAge: -1})
 		http.Redirect(w, r, "/?signin_error="+url.QueryEscape(reason), http.StatusFound)
@@ -252,10 +278,11 @@ func (p *Provider) Callback(w http.ResponseWriter, r *http.Request) (string, err
 		return fail("expired", errors.New("no sign-in in progress"))
 	}
 	f, ok := p.verify(c.Value)
-	if !ok || len(f) != 4 {
+	if !ok || len(f) != 6 {
 		return fail("expired", errors.New("invalid flow cookie"))
 	}
-	state, nonce, verifier := f[0], f[1], f[2]
+	state, nonce, verifier, action := f[0], f[1], f[2], f[4]
+	started, _ := strconv.ParseInt(f[5], 10, 64)
 	if exp, _ := strconv.ParseInt(f[3], 10, 64); p.now().Unix() > exp {
 		return fail("expired", errors.New("sign-in took too long"))
 	}
@@ -289,9 +316,14 @@ func (p *Provider) Callback(w http.ResponseWriter, r *http.Request) (string, err
 	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&tok) != nil || tok.IDToken == "" {
 		return fail("invalid", fmt.Errorf("token exchange returned HTTP %d", res.StatusCode))
 	}
-	sub, err := p.verifyIDToken(r.Context(), tok.IDToken, nonce)
+	sub, authTime, err := p.verifyIDToken(r.Context(), tok.IDToken, nonce)
 	if err != nil {
 		return fail("invalid", err)
+	}
+	// A step-up needs proof the person authenticated during this flow, not
+	// an older provider session; allow a little clock skew.
+	if action != "" && authTime < started-5 {
+		return fail("not-fresh", fmt.Errorf("authentication at %d predates the step-up at %d", authTime, started))
 	}
 	if len(p.cfg.Emails) > 0 {
 		email, err := p.userEmail(r.Context(), d, tok.AccessToken)
@@ -299,36 +331,40 @@ func (p *Provider) Callback(w http.ResponseWriter, r *http.Request) (string, err
 			return fail("not-allowed", fmt.Errorf("email %q is not allowed: %v", email, err))
 		}
 	}
-	exp := strconv.FormatInt(p.now().Add(SessionTTL).Unix(), 10)
 	http.SetCookie(w, &http.Cookie{Name: flowCookie, Path: "/auth/", MaxAge: -1})
+	if action != "" {
+		http.Redirect(w, r, "/#accounts", http.StatusFound)
+		return action, nil
+	}
+	exp := strconv.FormatInt(p.now().Add(SessionTTL).Unix(), 10)
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: p.sign(p.cfg.Owner, sub, exp), Path: "/", MaxAge: int(SessionTTL.Seconds()), HttpOnly: true, Secure: p.secure(), SameSite: http.SameSiteStrictMode})
 	http.Redirect(w, r, "/#accounts", http.StatusFound)
-	return sub, nil
+	return "", nil
 }
 
-func (p *Provider) verifyIDToken(ctx context.Context, raw, nonce string) (string, error) {
+func (p *Provider) verifyIDToken(ctx context.Context, raw, nonce string) (sub string, authTime int64, err error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
-		return "", errors.New("malformed ID token")
+		return "", 0, errors.New("malformed ID token")
 	}
 	var header struct{ Alg, Kid string }
 	if b, err := base64.RawURLEncoding.DecodeString(parts[0]); err != nil || json.Unmarshal(b, &header) != nil {
-		return "", errors.New("malformed ID token header")
+		return "", 0, errors.New("malformed ID token header")
 	}
 	if header.Alg != "RS256" {
-		return "", errors.New("unexpected ID token algorithm")
+		return "", 0, errors.New("unexpected ID token algorithm")
 	}
 	key, err := p.key(ctx, header.Kid)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return "", errors.New("malformed ID token signature")
+		return "", 0, errors.New("malformed ID token signature")
 	}
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if err = rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], sig); err != nil {
-		return "", errors.New("ID token signature is invalid")
+		return "", 0, errors.New("ID token signature is invalid")
 	}
 	var claims struct {
 		Iss   string          `json:"iss"`
@@ -337,35 +373,36 @@ func (p *Provider) verifyIDToken(ctx context.Context, raw, nonce string) (string
 		Exp   int64           `json:"exp"`
 		Iat   int64           `json:"iat"`
 		Nonce string          `json:"nonce"`
+		Auth  int64           `json:"auth_time"`
 	}
 	b, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || json.Unmarshal(b, &claims) != nil {
-		return "", errors.New("malformed ID token claims")
+		return "", 0, errors.New("malformed ID token claims")
 	}
 	var aud []string
 	if json.Unmarshal(claims.Aud, &aud) != nil {
 		var one string
 		if json.Unmarshal(claims.Aud, &one) != nil {
-			return "", errors.New("malformed audience")
+			return "", 0, errors.New("malformed audience")
 		}
 		aud = []string{one}
 	}
 	now := p.now().Unix()
 	switch {
 	case strings.TrimRight(claims.Iss, "/") != p.cfg.Issuer:
-		return "", errors.New("ID token issuer mismatch")
+		return "", 0, errors.New("ID token issuer mismatch")
 	case !slices.Contains(aud, p.cfg.ClientID):
-		return "", errors.New("ID token audience mismatch")
+		return "", 0, errors.New("ID token audience mismatch")
 	case claims.Exp < now-30:
-		return "", errors.New("ID token expired")
+		return "", 0, errors.New("ID token expired")
 	case claims.Iat > now+60:
-		return "", errors.New("ID token issued in the future")
+		return "", 0, errors.New("ID token issued in the future")
 	case subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(nonce)) != 1:
-		return "", errors.New("ID token nonce mismatch")
+		return "", 0, errors.New("ID token nonce mismatch")
 	case claims.Sub == "":
-		return "", errors.New("ID token has no subject")
+		return "", 0, errors.New("ID token has no subject")
 	}
-	return claims.Sub, nil
+	return claims.Sub, claims.Auth, nil
 }
 
 func (p *Provider) userEmail(ctx context.Context, d *discovery, accessToken string) (string, error) {

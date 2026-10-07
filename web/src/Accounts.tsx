@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { ArrowSquareOutIcon, CaretDownIcon, CaretUpIcon, CheckIcon, ClockIcon, PlusIcon, WarningIcon, XIcon } from "@phosphor-icons/react";
-import type { Account, Device, Limit, SignIn } from "./api";
+import { ArrowSquareOutIcon, CaretDownIcon, CaretUpIcon, CheckIcon, PlusIcon, WarningIcon, XIcon } from "@phosphor-icons/react";
+import type { Account, Grant, Limit, Reset, SignIn } from "./api";
 import { api, isShared, SHARED_DEVICE } from "./api";
 import type { Dashboard } from "./hooks";
 import { fmt } from "./model";
 import { ease, stagger } from "./motion";
 
-// Claude accounts that the user's devices are signed into. Connecting and
-// ordering are stored on the server; switching and resets are not built yet,
-// so they are shown as unavailable rather than as working controls.
+// Claude accounts that the user's devices are signed into: connecting,
+// ordering, usage, and the usage resets each account has to spend.
 
 const STALE_MS = 30 * 60_000;
 
@@ -63,12 +62,6 @@ export default function Accounts(d: Dashboard) {
             </motion.button>
           </header>
 
-          <motion.ul layout="position" className="mt-5 flex flex-wrap gap-x-6 gap-y-1 text-xs text-[#8b84ad]">
-            <Capability on title="Usage" />
-            <Capability on title="Automatic switching" />
-            <Capability title="Usage resets" />
-          </motion.ul>
-
           <AnimatePresence initial={false}>
             {adding && (
               <motion.div key="add" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.28, ease }} className="overflow-hidden">
@@ -103,6 +96,8 @@ export default function Accounts(d: Dashboard) {
             ))}
           </Section>
 
+          <Resets accounts={connected} />
+
           <AnimatePresence initial={false}>
             {(detected.length > 0 || d.accounts.length === 0) && (
               <Section key="detected" title="Detected on your devices" count={detected.length}>
@@ -124,16 +119,6 @@ export default function Accounts(d: Dashboard) {
         </div>
       </LayoutGroup>
     </div>
-  );
-}
-
-function Capability({ title, on }: { title: string; on?: boolean }) {
-  return (
-    <li className="flex items-center gap-1.5">
-      {on ? <CheckIcon className="size-3.5 text-[#8fe3bb]" weight="bold" /> : <ClockIcon className="size-3.5" />}
-      <span className={on ? "text-[#c9c2e6]" : ""}>{title}</span>
-      <span>{on ? "live" : "planned"}</span>
-    </li>
   );
 }
 
@@ -323,36 +308,158 @@ function Disconnect({ shared, onConfirm }: { shared: boolean; onConfirm: () => v
   );
 }
 
-// Connects an account through Claude's own sign-in, run by the companion on
-// the chosen device. The browser opens there; from elsewhere, the sign-in page
-// shows a code to paste here.
-function AddAccount({ onDone }: { onDone: () => void }) {
-  const [devices, setDevices] = useState<Device[]>();
-  const [device, setDevice] = useState<string>();
-  const [signIn, setSignIn] = useState<SignIn>();
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
+const clearLabel = (c: string) =>
+  c === "five_hour" ? "Session" : c === "seven_day" ? "Weekly" : c.startsWith("seven_day_") ? `Weekly ${c.slice(10).replace(/_/g, " ")}` : c.replace(/_/g, " ");
+const openReset = (r: Reset) => r.state === "pending" || r.state === "approved" || r.state === "executing";
+
+// Reset offers each account reported, with a way to spend one. Using a reset
+// takes a fresh passkey sign-in for that request; a device holding the account
+// then redeems it with the account's own token.
+function Resets({ accounts }: { accounts: Account[] }) {
+  const [list, setList] = useState<Reset[]>([]);
+  const [error, setError] = useState(() =>
+    new URLSearchParams(location.search).has("signin_error") ? "Passkey verification did not complete, so no reset was used." : "",
+  );
+  const busy = list.some(openReset);
 
   useEffect(() => {
+    if (location.search) history.replaceState(null, "", "/#accounts");
+  }, []);
+  useEffect(() => {
     let live = true;
-    const load = () =>
-      api
-        .devices()
-        .then((list) => {
-          if (!live) return;
-          // Signing in once for every device comes first.
-          list.sort((a, b) => Number(b.id === SHARED_DEVICE) - Number(a.id === SHARED_DEVICE));
-          setDevices(list);
-          setDevice((d) => (d && list.some((x) => x.id === d) ? d : list[0]?.id));
-        })
-        .catch(() => live && setDevices([]));
+    const load = () => api.resets().then((l) => live && setList(l)).catch(() => {});
     load();
-    const t = setInterval(load, 5000);
+    const t = setInterval(load, busy ? 2000 : 30_000);
     return () => {
       live = false;
       clearInterval(t);
     };
-  }, []);
+  }, [busy]);
+
+  const fail = (e: Error) => setError(e.message);
+  const verify = (id: string) => api.approveReset(id).then(({ url }) => location.assign(url));
+  const use = (a: Account, g: Grant) => {
+    setError("");
+    api
+      .requestReset(a.id, g.id)
+      .then((r) => {
+        setList((l) => [r, ...l]);
+        return verify(r.id);
+      })
+      .catch(fail);
+  };
+  const cancel = (id: string) => api.cancelReset(id).then((r) => setList((l) => l.map((x) => (x.id === r.id ? r : x)))).catch(fail);
+
+  const rows = accounts.flatMap((a) => (a.usage?.grants ?? []).map((g) => ({ a, g })));
+  if (!accounts.length) return null;
+  return (
+    <Section title="Resets" count={rows.reduce((n, { g }) => n + g.resets_left, 0)}>
+      {error && (
+        <motion.p key="error" layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[13px] text-[#ffb8cf]">
+          {error}
+        </motion.p>
+      )}
+      {!rows.length && <Empty key="empty">No account has a usage reset to spend. Offers appear here as devices report them.</Empty>}
+      {rows.map(({ a, g }, i) => {
+        const last = list.find((r) => r.account_id === a.id);
+        const open = !!last && openReset(last);
+        const mine = last?.grant_id === g.id ? last : undefined;
+        return (
+          <motion.article key={`${a.id}/${g.id}`} layout {...stagger(i)} exit={{ opacity: 0, transition: { duration: 0.15 } }} className="grid grid-cols-[2.5rem_1fr] gap-x-4">
+            <span className="tabular pt-0.5 text-2xl leading-none font-semibold text-white/25">{g.resets_left}</span>
+            <div className="min-w-0">
+              <div className="flex items-start gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-[15px] font-medium text-white">{a.display_name || a.email || a.id.slice(0, 8)}</span>
+                    {g.label && <Tag>{g.label}</Tag>}
+                    {g.paused && <Tag>Paused</Tag>}
+                  </div>
+                  <div className="mt-0.5 text-xs text-[#8b84ad]">
+                    {g.resets_left} of {g.resets_total} left, clears {g.clears.length ? g.clears.map(clearLabel).join(" and ") : "its limits"}
+                    {g.ends_at && `, expires ${new Date(g.ends_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`}
+                    {!g.usable_now && g.resets_left > 0 && (g.needs_limit ? ". Usable once the account reaches a limit" : ". Claude says it is not usable right now")}
+                  </div>
+                </div>
+                <UseReset disabled={open || g.paused || g.resets_left === 0} onConfirm={() => use(a, g)} />
+              </div>
+              {mine && <ResetStatus reset={mine} onVerify={() => verify(mine.id).catch(fail)} onCancel={() => cancel(mine.id)} />}
+            </div>
+          </motion.article>
+        );
+      })}
+    </Section>
+  );
+}
+
+function ResetStatus({ reset: r, onVerify, onCancel }: { reset: Reset; onVerify: () => void; onCancel: () => void }) {
+  const text: Record<Reset["state"], string> = {
+    pending: "Waiting for your passkey",
+    approved: "Approved, waiting for a device holding this account",
+    executing: `Being used on ${r.device_id ? fmt.short(r.device_id) : "a device"}`,
+    succeeded: "Reset used",
+    failed: "Not used",
+    cancelled: "Cancelled",
+    expired: "Expired",
+    unknown: "Unclear whether the reset was used",
+  };
+  const tone = r.state === "succeeded" ? "text-[#8fe3bb]" : r.state === "failed" || r.state === "unknown" ? "text-[#ffb8cf]" : "text-[#c9c2e6]";
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+      {openReset(r) && r.state !== "pending" ? <Spinner label={text[r.state]} /> : <span className={tone}>{text[r.state]}{r.message ? `: ${r.message}` : ""}</span>}
+      <span className="text-[#8b84ad]">{fmt.ago(r.updated_at)}</span>
+      {r.state === "pending" && (
+        <button onClick={onVerify} className={`px-3 py-1 ${quiet}`}>
+          Verify with passkey
+        </button>
+      )}
+      {(r.state === "pending" || r.state === "approved") && (
+        <button onClick={onCancel} className="text-[#8b84ad] hover:text-white">
+          Cancel
+        </button>
+      )}
+    </div>
+  );
+}
+
+function UseReset({ disabled, onConfirm }: { disabled: boolean; onConfirm: () => void }) {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!asking) return;
+    const t = setTimeout(() => setAsking(false), 6000);
+    return () => clearTimeout(t);
+  }, [asking]);
+  const swap = { initial: { opacity: 0, scale: 0.94 }, animate: { opacity: 1, scale: 1 }, exit: { opacity: 0, scale: 0.94 }, transition: { duration: 0.14 } };
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      {asking ? (
+        <motion.button
+          key="confirm"
+          {...swap}
+          onClick={() => {
+            setAsking(false);
+            onConfirm();
+          }}
+          className={`shrink-0 px-3 py-1.5 text-xs ${primary}`}
+          title="Spends one reset once your passkey confirms it. It cannot be undone."
+        >
+          Verify with passkey
+        </motion.button>
+      ) : (
+        <motion.button key="ask" {...swap} disabled={disabled} onClick={() => setAsking(true)} className={`shrink-0 px-3 py-1.5 text-xs ${quiet} disabled:opacity-40 disabled:hover:bg-transparent`}>
+          Use reset
+        </motion.button>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// Connects an account through Claude's own sign-in, run by the server and
+// shared with every device: open the sign-in page, then paste the code it shows.
+function AddAccount({ onDone }: { onDone: () => void }) {
+  const [signIn, setSignIn] = useState<SignIn>();
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
 
   const active = signIn && !["completed", "failed", "cancelled", "expired"].includes(signIn.state);
   useEffect(() => {
@@ -363,59 +470,39 @@ function AddAccount({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     if (signIn?.state !== "completed") return;
-    const t = setTimeout(onDone, signIn.device_id === SHARED_DEVICE ? 2600 : 1400);
+    const t = setTimeout(onDone, 2600);
     return () => clearTimeout(t);
   }, [signIn?.state, onDone]);
 
   const run = (op: () => Promise<SignIn>) => {
     setError("");
-    op().then(setSignIn).catch((e: Error) => setError(e.message));
+    op()
+      .then(setSignIn)
+      .catch((e: Error) => setError(/offline/.test(e.message) ? "The server does not share sign-ins. Start it with --vault (NEBULA_VAULT_DIR)." : e.message));
   };
-  const name = (id?: string) => {
-    const d = devices?.find((x) => x.id === id);
-    return d ? d.name || fmt.short(d.id) : "this device";
-  };
-  const everywhere = signIn?.device_id === SHARED_DEVICE;
   const swap = { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 }, transition: { duration: 0.18, ease } };
 
   let body: React.ReactNode;
   let key: string;
-  if (devices === undefined) {
-    key = "loading";
-    body = <Spinner label="Looking for devices" />;
-  } else if (!signIn || signIn.state === "cancelled") {
+  if (!signIn || signIn.state === "cancelled") {
     key = "start";
-    body = devices.length ? (
+    body = (
       <div className="flex flex-wrap items-center gap-2">
-        {devices.length > 1 &&
-          devices.map((d) => (
-            <button
-              key={d.id}
-              onClick={() => setDevice(d.id)}
-              className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${device === d.id ? "border-[#a98bff]/60 bg-[#a98bff]/15 text-white" : "border-white/10 text-[#c9c2e6] hover:text-white"}`}
-            >
-              {d.name || fmt.short(d.id)}
-            </button>
-          ))}
-        <motion.button whileTap={{ scale: 0.97 }} disabled={!device} onClick={() => device && run(() => api.startSignIn(device))} className={`ml-auto px-4 py-2 text-[13px] ${primary}`}>
-          Sign in with Claude{devices.length === 1 ? ` on ${name(device)}` : ""}
+        <p className="text-[13px] text-[#8b84ad]">The account reaches every device within a minute.</p>
+        <motion.button whileTap={{ scale: 0.97 }} onClick={() => run(() => api.startSignIn(SHARED_DEVICE))} className={`ml-auto px-4 py-2 text-[13px] ${primary}`}>
+          Sign in with Claude
         </motion.button>
-      </div>
-    ) : (
-      <div className="space-y-2 text-[13px] text-[#c9c2e6]">
-        <p>No device online. Start the companion on the computer to sign in from:</p>
-        <pre className="rounded-lg border border-white/[0.06] bg-[#0c0a1d] px-3 py-2 font-geist-mono text-xs text-[#e9e5fa]">nebula sync --watch</pre>
       </div>
     );
   } else if (signIn.state === "pending" || signIn.state === "starting" || signIn.state === "completing") {
     key = signIn.state === "completing" ? "completing" : "starting";
-    body = <Spinner label={signIn.state === "completing" ? "Connecting" : everywhere ? "Opening Claude sign-in" : `Opening Claude sign-in on ${name(signIn.device_id)}`} />;
+    body = <Spinner label={signIn.state === "completing" ? "Connecting" : "Opening Claude sign-in"} />;
   } else if (signIn.state === "waiting") {
     key = "waiting";
     body = (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-4">
-          <Spinner label={everywhere ? "Sign in, then paste the code Claude shows" : `Waiting for sign-in on ${name(signIn.device_id)}`} />
+          <Spinner label="Sign in, then paste the code Claude shows" />
           {signIn.url && (
             <a href={signIn.url} target="_blank" rel="noopener noreferrer" className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs ${quiet}`}>
               Open sign-in page
@@ -453,7 +540,7 @@ function AddAccount({ onDone }: { onDone: () => void }) {
         <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className="grid size-5 place-items-center rounded-full bg-[#8fe3bb]/20 text-[#8fe3bb]">
           <CheckIcon className="size-3" weight="bold" />
         </motion.span>
-        {everywhere ? "Connected. Reaching every device within a minute." : "Connected"}
+        Connected. Reaching every device within a minute.
       </div>
     );
   } else {

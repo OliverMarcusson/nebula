@@ -14,7 +14,10 @@ import Accounts from "./Accounts";
 type Filter = { kind: "all" } | { kind: "device"; id: string } | { kind: "project"; id: string };
 
 export default function Console(d: Dashboard) {
-  const [view, setView] = useState<"sessions" | "accounts">(() => (location.hash === "#accounts" ? "accounts" : "sessions"));
+  const [view, setView] = useState<"sessions" | "accounts">(() =>
+    // A passkey step-up that failed returns with signin_error; its message is on the accounts view.
+    location.hash === "#accounts" || location.search.includes("signin_error") ? "accounts" : "sessions",
+  );
   const [filter, setFilter] = useState<Filter>({ kind: "all" });
   useEffect(() => {
     history.replaceState(null, "", view === "accounts" ? "#accounts" : location.pathname);

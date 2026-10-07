@@ -27,6 +27,7 @@ import (
 	"github.com/olivermarcusson/nebula/internal/accounts"
 	"github.com/olivermarcusson/nebula/internal/logins"
 	"github.com/olivermarcusson/nebula/internal/oidc"
+	"github.com/olivermarcusson/nebula/internal/resets"
 	"github.com/olivermarcusson/nebula/internal/sessions"
 	"github.com/olivermarcusson/nebula/web"
 )
@@ -258,6 +259,7 @@ func serve(args []string) error {
 	}
 	defer accountStore.Close()
 	signIns := logins.New()
+	resetRequests := resets.New()
 	var shared *vault
 	if *vaultDir != "" {
 		claude, err := realClaude()
@@ -289,8 +291,33 @@ func serve(args []string) error {
 		case r.URL.Path == "/auth/login" && r.Method == "GET":
 			signin.Start(w, r)
 		case r.URL.Path == "/auth/callback" && r.Method == "GET":
-			if _, err := signin.Callback(w, r); err != nil {
+			action, err := signin.Callback(w, r)
+			if err != nil {
 				log.Print("Dashboard sign-in failed: ", err)
+			}
+			if id, ok := strings.CutPrefix(action, "reset:"); ok {
+				if err := resetRequests.Approve(signin.Owner(), id); err != nil {
+					log.Printf("Reset %s not approved: %v", id, err)
+				}
+			}
+		case strings.HasPrefix(r.URL.Path, "/auth/reset/") && r.Method == "POST":
+			// Approving a reset takes a fresh passkey sign-in bound to it,
+			// started from the signed-in dashboard itself, which opens the URL.
+			id := strings.TrimPrefix(r.URL.Path, "/auth/reset/")
+			owner, ok := signin.Session(r)
+			switch {
+			case !ok || r.Header.Get("Origin") != signin.Origin():
+				http.Error(w, "sign in to the dashboard with Claustra first", 403)
+			case !resetRequests.Pending(owner, id):
+				http.Error(w, "this reset is no longer waiting for approval", 409)
+			default:
+				u, err := signin.StepUp(w, r, "reset:"+id)
+				if err != nil {
+					http.Error(w, "sign-in provider unavailable", 502)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]string{"url": u})
 			}
 		case r.URL.Path == "/auth/logout" && r.Method == "POST":
 			if r.Header.Get("Origin") != signin.Origin() {
@@ -359,8 +386,12 @@ func serve(args []string) error {
 			loginsAPI(w, r, owner, signIns, accountStore, write)
 			return
 		}
+		if resetsPath(r.URL.Path) {
+			resetsAPI(w, r, owner, bearer, resetRequests, accountStore, write)
+			return
+		}
 		if r.URL.Path == "/v1/accounts" || strings.HasPrefix(r.URL.Path, "/v1/accounts/") || strings.HasPrefix(r.URL.Path, "/v1/devices/") {
-			accountsAPI(w, r, owner, accountStore, shared, write)
+			accountsAPI(w, r, owner, accountStore, shared, resetRequests, write)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/v1/chunks") || strings.HasPrefix(r.URL.Path, "/v1/sessions") {
@@ -427,7 +458,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // accountsAPI serves account management. Devices report the accounts their
 // native profiles are signed into; the owner connects, orders and enables them.
-func accountsAPI(w http.ResponseWriter, r *http.Request, owner string, store *accounts.Store, shared *vault, write func(any)) {
+func accountsAPI(w http.ResponseWriter, r *http.Request, owner string, store *accounts.Store, shared *vault, resetRequests *resets.Manager, write func(any)) {
 	respond := func(list []accounts.Account, err error) {
 		switch {
 		case errors.Is(err, accounts.ErrNotFound):
@@ -479,6 +510,7 @@ func accountsAPI(w http.ResponseWriter, r *http.Request, owner string, store *ac
 				respond(store.Connect(owner, parts[1]))
 				return
 			}
+			resetRequests.Revoke(owner, parts[1])
 			if shared != nil {
 				// Disconnecting a shared account signs the server out of it too.
 				if err := shared.Remove(owner, parts[1]); err != nil {
@@ -610,6 +642,98 @@ func archiveAPI(w http.ResponseWriter, r *http.Request, owner string, store *ses
 			w.Header().Set("Allow", "GET, PUT")
 			http.Error(w, "method not allowed", 405)
 		}
+	}
+}
+
+func resetsPath(p string) bool {
+	parts := strings.Split(strings.TrimPrefix(p, "/v1/"), "/")
+	return parts[0] == "resets" || (parts[0] == "devices" && len(parts) >= 3 && parts[2] == "resets")
+}
+
+// resetsAPI serves usage reset requests. The dashboard requests and cancels
+// them (approval happens under /auth/reset/); devices claim approved ones for
+// accounts they hold and report the result.
+func resetsAPI(w http.ResponseWriter, r *http.Request, owner string, bearer bool, m *resets.Manager, store *accounts.Store, write func(any)) {
+	respond := func(v any, err error) {
+		switch {
+		case errors.Is(err, resets.ErrNotFound):
+			http.NotFound(w, r)
+		case errors.Is(err, resets.ErrInvalid):
+			http.Error(w, "that reset cannot be requested now; refresh and try again", 400)
+		case err != nil:
+			http.Error(w, "resets unavailable", 500)
+		default:
+			write(v)
+		}
+	}
+	method := func(m string) bool {
+		if r.Method != m {
+			w.Header().Set("Allow", m)
+			http.Error(w, "method not allowed", 405)
+			return false
+		}
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/"), "/")
+	switch {
+	case len(parts) == 1 && r.Method == "GET":
+		write(m.List(owner))
+	case len(parts) == 1:
+		var body struct {
+			AccountID string `json:"account_id"`
+			GrantID   string `json:"grant_id"`
+		}
+		if !method("POST") || !decodeJSON(w, r, &body) {
+			return
+		}
+		list, err := store.List(owner)
+		if err != nil {
+			respond(nil, err)
+			return
+		}
+		for _, a := range list {
+			if a.ID == body.AccountID {
+				respond(m.Create(owner, a, body.GrantID))
+				return
+			}
+		}
+		http.NotFound(w, r)
+	case parts[0] == "resets" && len(parts) == 3 && parts[2] == "cancel":
+		if method("POST") {
+			respond(m.Cancel(owner, parts[1]))
+		}
+	case parts[0] == "devices" && !bearer:
+		http.Error(w, "device token required", 403)
+	case len(parts) == 3 && sessions.ID(parts[1]):
+		if !method("POST") {
+			return
+		}
+		list, err := store.List(owner)
+		if err != nil {
+			respond(nil, err)
+			return
+		}
+		holds := func(id string) bool {
+			for _, a := range list {
+				for _, s := range a.Sightings {
+					if a.ID == id && s.DeviceID == parts[1] {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		write(m.Claim(owner, parts[1], holds))
+	case len(parts) == 4 && sessions.ID(parts[1]):
+		var body struct {
+			State   string `json:"state"`
+			Message string `json:"message"`
+		}
+		if method("PUT") && decodeJSON(w, r, &body) {
+			respond(m.Finish(owner, parts[1], parts[3], body.State, body.Message))
+		}
+	default:
+		http.NotFound(w, r)
 	}
 }
 

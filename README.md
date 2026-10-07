@@ -12,8 +12,11 @@ CLI) on Windows and Linux. Claude Desktop is out of scope.
   connected account with room; in a terminal it resumes the session on the next
   account when a usage limit is hit.
 
-Not implemented yet: redeeming usage resets (planned with Claustra passkey
-approval) and per-device revocation.
+- **Resets:** each account's usage reset offers are listed in the dashboard;
+  using one takes a fresh Claustra passkey sign-in for that reset, then a device
+  holding the account redeems it.
+
+Not implemented yet: per-device revocation.
 See the [design](docs/design.md).
 
 ## Install on a device
@@ -59,12 +62,11 @@ files; without one, devices are not updated.
 Accounts connect through Claude Code's own `claude auth login`, run into a fresh
 profile (its own `CLAUDE_CONFIG_DIR`) under `<user config>/Nebula/profiles/`:
 
-- **Dashboard:** Claude accounts > Add account > Sign in with Claude. It runs on
-  a device whose companion is online; the browser opens there and finishes by
-  itself, or open the sign-in link elsewhere and paste the code Claude shows.
-- **Terminal:** `nebula login`. **Claude Code:** `/nebula-login`.
-- **All devices at once:** with shared accounts enabled on the server, choose
-  *All devices* in the dashboard, sign in, and paste the code Claude shows.
+- **Dashboard:** Claude accounts > Add account > Sign in with Claude, then paste
+  the code Claude shows. The server signs in (shared accounts must be enabled
+  with `--vault`) and every device receives the account.
+- **Terminal:** `nebula login`. **Claude Code:** `/nebula-login`. These sign in
+  on that device only.
 
 Credentials stay in that profile on that device. Nebula profiles share sessions,
 settings, `CLAUDE.md`, skills, plugins, agents, commands, hooks, and history with

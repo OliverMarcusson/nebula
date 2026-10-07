@@ -198,6 +198,7 @@ func (a *loginAgent) run(ctx context.Context) {
 		var w logins.Work
 		if err := a.c.call(ctx, "POST", "/v1/devices/"+a.device+"/poll", map[string]string{"name": name}, &w); err == nil {
 			a.handle(ctx, w)
+			a.claimResets(ctx)
 		}
 		a.mu.Lock()
 		delay := 5 * time.Second

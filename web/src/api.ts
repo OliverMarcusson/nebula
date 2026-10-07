@@ -31,6 +31,31 @@ export type Limit = {
   active: boolean;
 };
 
+export type Grant = {
+  id: string;
+  label?: string;
+  resets_total: number;
+  resets_left: number;
+  ends_at?: string;
+  clears: string[];
+  paused?: boolean;
+  usable_now: boolean;
+  needs_limit?: boolean;
+};
+
+export type Reset = {
+  id: string;
+  account_id: string;
+  grant_id: string;
+  grant_label?: string;
+  clears: string[];
+  state: "pending" | "approved" | "executing" | "succeeded" | "failed" | "cancelled" | "expired" | "unknown";
+  message?: string;
+  device_id?: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Account = {
   id: string;
   account_uuid: string;
@@ -44,7 +69,7 @@ export type Account = {
   enabled: boolean;
   priority: number;
   sightings: { device_id: string; profile: string; reported_at: string }[];
-  usage?: { observed_at: string; device_id: string; limits: Limit[] };
+  usage?: { observed_at: string; device_id: string; limits: Limit[]; grants?: Grant[] | null };
   first_seen: string;
   connected_at?: string;
   limited_until?: string;
@@ -112,5 +137,10 @@ export const api = {
   signIn: (id: string) => request<SignIn>(`/v1/logins/${id}`),
   submitCode: (id: string, code: string) => request<SignIn>(`/v1/logins/${id}/code`, { method: "POST", body: { code } }),
   cancelSignIn: (id: string) => request<SignIn>(`/v1/logins/${id}/cancel`, { method: "POST" }),
+  resets: () => request<Reset[]>("/v1/resets"),
+  requestReset: (account_id: string, grant_id: string) => request<Reset>("/v1/resets", { method: "POST", body: { account_id, grant_id } }),
+  cancelReset: (id: string) => request<Reset>(`/v1/resets/${id}/cancel`, { method: "POST" }),
+  // Starts the passkey sign-in that approves one reset; the caller opens the URL.
+  approveReset: (id: string) => request<{ url: string }>(`/auth/reset/${id}`, { method: "POST", bearer: "" }),
   reorder: (ids: string[]) => request<Account[]>("/v1/accounts/order", { method: "PUT", body: { ids } }),
 };

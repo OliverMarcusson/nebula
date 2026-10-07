@@ -24,6 +24,7 @@ type fakeProvider struct {
 	aud       string
 	email     string
 	badSig    bool
+	authAge   int64 // seconds between the reported authentication and now
 }
 
 func newFake(t *testing.T) *fakeProvider {
@@ -59,7 +60,7 @@ func newFake(t *testing.T) *fakeProvider {
 func (f *fakeProvider) idToken() string {
 	enc := func(v any) string { b, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(b) }
 	now := time.Now().Unix()
-	signing := enc(map[string]string{"alg": "RS256", "kid": "k1"}) + "." + enc(map[string]any{"iss": f.URL, "sub": "pairwise-sub", "aud": f.aud, "exp": now + 300, "iat": now, "nonce": f.nonce})
+	signing := enc(map[string]string{"alg": "RS256", "kid": "k1"}) + "." + enc(map[string]any{"iss": f.URL, "sub": "pairwise-sub", "aud": f.aud, "exp": now + 300, "iat": now, "nonce": f.nonce, "auth_time": now - f.authAge})
 	digest := sha256.Sum256([]byte(signing))
 	sig, _ := rsa.SignPKCS1v15(rand.Reader, f.key, crypto.SHA256, digest[:])
 	if f.badSig {
@@ -70,15 +71,30 @@ func (f *fakeProvider) idToken() string {
 
 // signIn runs Start, plays the provider, and runs Callback.
 func signIn(t *testing.T, p *Provider, f *fakeProvider, tamperState bool) *httptest.ResponseRecorder {
+	rec, _ := flow(t, p, f, tamperState, "")
+	return rec
+}
+
+// flow runs Start, or StepUp for an action, then the provider and Callback.
+func flow(t *testing.T, p *Provider, f *fakeProvider, tamperState bool, action string) (*httptest.ResponseRecorder, string) {
 	start := httptest.NewRecorder()
-	p.Start(start, httptest.NewRequest("GET", "/auth/login", nil))
-	loc, err := url.Parse(start.Header().Get("Location"))
+	link := ""
+	if action == "" {
+		p.Start(start, httptest.NewRequest("GET", "/auth/login", nil))
+		link = start.Header().Get("Location")
+	} else {
+		link, _ = p.StepUp(start, httptest.NewRequest("POST", "/auth/reset/x", nil), action)
+	}
+	loc, err := url.Parse(link)
 	if err != nil || !strings.HasPrefix(loc.String(), f.URL+"/authorize") {
 		t.Fatalf("start redirect: %v %s", err, loc)
 	}
 	q := loc.Query()
 	if q.Get("code_challenge_method") != "S256" || q.Get("redirect_uri") != "https://nebula.example/auth/callback" {
 		t.Fatalf("authorize parameters: %v", q)
+	}
+	if fresh := q.Get("prompt") == "login" && q.Get("max_age") == "0"; fresh != (action != "") {
+		t.Fatalf("prompt=%q max_age=%q for action %q", q.Get("prompt"), q.Get("max_age"), action)
 	}
 	f.challenge, f.nonce = q.Get("code_challenge"), q.Get("nonce")
 	state := q.Get("state")
@@ -90,8 +106,28 @@ func signIn(t *testing.T, p *Provider, f *fakeProvider, tamperState bool) *httpt
 		cb.AddCookie(c)
 	}
 	rec := httptest.NewRecorder()
-	p.Callback(rec, cb)
-	return rec
+	got, _ := p.Callback(rec, cb)
+	return rec, got
+}
+
+func TestStepUp(t *testing.T) {
+	f := newFake(t)
+	defer f.Close()
+	p := provider(t, f)
+	rec, action := flow(t, p, f, false, "reset:abc")
+	if action != "reset:abc" {
+		t.Fatalf("fresh step-up returned %q: %s", action, rec.Header().Get("Location"))
+	}
+	if _, ok := session(p, rec); ok {
+		t.Fatal("step-up created a dashboard session")
+	}
+	f.authAge = 600 // the provider reused an older login
+	if rec, action = flow(t, p, f, false, "reset:abc"); action != "" || !strings.Contains(rec.Header().Get("Location"), "signin_error=not-fresh") {
+		t.Fatalf("stale step-up accepted: %q %s", action, rec.Header().Get("Location"))
+	}
+	if _, action = flow(t, p, f, true, "reset:abc"); action != "" {
+		t.Fatal("step-up with forged state accepted")
+	}
 }
 
 func session(p *Provider, rec *httptest.ResponseRecorder) (string, bool) {

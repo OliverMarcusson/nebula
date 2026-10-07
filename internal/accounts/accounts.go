@@ -53,12 +53,31 @@ type Limit struct {
 	Active   bool       `json:"active"`
 }
 
+// Grant is a usage reset offer: a number of resets, each clearing the listed
+// usage windows. UsableNow is Claude's own verdict at the time of reading.
+type Grant struct {
+	ID          string     `json:"id"`
+	Label       string     `json:"label,omitempty"`
+	ResetsTotal int        `json:"resets_total"`
+	ResetsLeft  int        `json:"resets_left"`
+	EndsAt      *time.Time `json:"ends_at,omitempty"`
+	Clears      []string   `json:"clears"`
+	Paused      bool       `json:"paused,omitempty"`
+	UsableNow   bool       `json:"usable_now"`
+	NeedsLimit  bool       `json:"needs_limit,omitempty"`
+}
+
+// GrantID matches the grant ids Claude accepts when a reset is redeemed.
+var GrantID = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
+
 // Usage is the native client's own cached usage reading, attributed to the
-// reporting device rather than independently verified.
+// reporting device rather than independently verified. Grants is nil when the
+// reading did not include reset offers (Claude Code's cache never does).
 type Usage struct {
 	ObservedAt time.Time `json:"observed_at"`
 	DeviceID   string    `json:"device_id"`
 	Limits     []Limit   `json:"limits"`
+	Grants     []Grant   `json:"grants"`
 }
 
 type Profile struct {
@@ -119,6 +138,19 @@ func (r Report) Validate() error {
 			for _, l := range p.Usage.Limits {
 				if !short(l.Kind, 64) || l.Kind == "" || !short(l.Group, 64) || !short(l.Severity, 32) || l.Percent < 0 || l.Percent > 1000 {
 					return invalid("invalid usage limit")
+				}
+			}
+			if len(p.Usage.Grants) > 16 {
+				return invalid("too many reset grants")
+			}
+			for _, g := range p.Usage.Grants {
+				if !GrantID.MatchString(g.ID) || !short(g.Label, 128) || g.ResetsLeft < 0 || g.ResetsTotal < 0 || len(g.Clears) > 16 {
+					return invalid("invalid reset grant")
+				}
+				for _, c := range g.Clears {
+					if !short(c, 64) {
+						return invalid("invalid reset grant")
+					}
 				}
 			}
 		}
@@ -274,6 +306,9 @@ func (s *Store) Report(owner, device string, r Report) ([]Account, error) {
 			if p.Usage != nil && (a.Usage == nil || p.Usage.ObservedAt.After(a.Usage.ObservedAt)) {
 				u := *p.Usage
 				u.DeviceID = device
+				if u.Grants == nil && a.Usage != nil {
+					u.Grants = a.Usage.Grants // a cached reading knows nothing of resets
+				}
 				a.Usage = &u
 				// A reading after the limit was hit that shows room clears it.
 				if a.LimitedUntil != nil && !u.Exhausted(now) && u.ObservedAt.After(a.LimitedUntil.Add(-limitedFor)) {
