@@ -34,9 +34,16 @@ buildGoModule {
     chmod -R u+w web/dist
   '';
 
-  # Same reasoning as Claustra's backup script: installed from its own store
-  # path, so its shebang is rewritten here rather than by patchShebangs.
+  # Companion binaries the server hands to devices (`nebula update`). The
+  # backup script, as in Claustra, is installed from its own store path, so
+  # its shebang is rewritten here rather than by patchShebangs.
   postInstall = ''
+    for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+      os=''${target%/*} arch=''${target#*/} ext=
+      [ "$os" = windows ] && ext=.exe
+      GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+        -o $out/share/nebula/downloads/nebula-$os-$arch$ext ./cmd/nebula
+    done
     install -Dm755 ${../scripts/backup.sh} $out/bin/nebula-backup
     substituteInPlace $out/bin/nebula-backup --replace-fail '#!/usr/bin/env bash' '#!${bash}/bin/bash'
   '';

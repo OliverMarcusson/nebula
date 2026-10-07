@@ -15,3 +15,10 @@ func execClaude(claude string, args, env []string) int {
 	fmt.Fprintln(os.Stderr, "nebula:", err)
 	return 126
 }
+
+// restartSelf replaces the companion with its updated executable, keeping
+// its pid for systemd.
+func restartSelf(self string) {
+	err := syscall.Exec(self, os.Args, os.Environ())
+	fmt.Fprintln(os.Stderr, "nebula: restart failed:", err)
+}

@@ -38,6 +38,20 @@ Then start Claude with `nebula-claude` (or `alias claude=nebula-claude`), and in
 T3 Code set Settings > Claude > Binary path to the launcher. `nebula setup
 --uninstall` stops the companion; `--no-service` and `--no-mod` skip those steps.
 
+### Updates
+
+Devices follow the server. The Nix package builds companion binaries for
+Linux and Windows (amd64, arm64) alongside the server, which serves them at
+`GET /v1/update/{os}-{arch}` with the binary's SHA-256 as its ETag. The
+companion checks every hour, verifies the checksum, makes sure the new binary
+runs, swaps it in, and restarts; on Windows it also replaces the launcher copy.
+Deploying the server therefore updates every device within the hour. `nebula
+update` does the same at once, and is the only way a development build (`go
+build`, version `dev`) updates. A companion also restarts whenever its
+executable changes, so reinstalling takes effect without a manual restart.
+Other servers set `NEBULA_DOWNLOADS` to a directory of `nebula-<os>-<arch>[.exe]`
+files; without one, devices are not updated.
+
 ## Connecting accounts
 
 Accounts connect through Claude Code's own `claude auth login`, run into a fresh

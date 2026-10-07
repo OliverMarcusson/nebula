@@ -74,7 +74,7 @@ func parse(f *flag.FlagSet, args []string) error {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: nebula setup|init|serve|sync|login|accounts|claude|limited|list|fetch|restore")
+		return errors.New("usage: nebula setup|update|init|serve|sync|login|accounts|claude|limited|list|fetch|restore")
 	}
 	args := os.Args[2:]
 	switch os.Args[1] {
@@ -92,6 +92,8 @@ func run() error {
 		return limitedCommand(args)
 	case "setup":
 		return setup(args)
+	case "update":
+		return updateCommand(args)
 	case "version", "--version":
 		fmt.Println("nebula", version)
 		return nil
@@ -270,6 +272,7 @@ func serve(args []string) error {
 		shared = &vault{dir: filepath.Clean(*vaultDir), claude: claude, owners: owners, signIns: signIns, store: accountStore}
 		log.Print("Sharing Claude sign-ins with every device, using ", claude)
 	}
+	binaries := &downloads{dir: downloadsDir(), digests: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/auth/", func(w http.ResponseWriter, r *http.Request) {
@@ -344,6 +347,10 @@ func serve(args []string) error {
 			default:
 				write(map[string]any{"accounts": shared.Tokens(owner)})
 			}
+			return
+		}
+		if platform, ok := strings.CutPrefix(r.URL.Path, "/v1/update/"); ok {
+			binaries.serve(w, r, platform)
 			return
 		}
 		if loginsPath(r.URL.Path) {
@@ -956,7 +963,11 @@ func syncSessions(args []string) error {
 	confirmed := map[string]string{}
 	reported := map[string]string{}
 	var sharedAt time.Time
+	updates := newUpdater(c)
 	syncOnce := func() error {
+		if *watch {
+			updates.tick(ctx)
+		}
 		// Shared accounts first, so the report below includes new ones.
 		if time.Since(sharedAt) >= time.Minute {
 			sharedAt = time.Now()
