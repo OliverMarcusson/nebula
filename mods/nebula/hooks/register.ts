@@ -1,6 +1,7 @@
 import type { EngineInterface, On, Timer } from 'claude-code'
 
-// Only fixed companion commands; no shell or model supplied arguments.
+// Only fixed companion commands; the one supplied argument, an account name
+// for `nebula switch`, is checked against a strict pattern first.
 type State = { timer?: Timer; syncing?: Promise<string>; signingIn?: boolean; limited?: boolean; exitAfterTurn?: boolean }
 type Companion = { executable: string; projects?: string; env: Record<string, string> }
 
@@ -94,6 +95,30 @@ async function onLimit($: EngineInterface, state: State, sessionId: string) {
   }
 }
 
+const accountName = /^[A-Za-z0-9][A-Za-z0-9._+@-]{0,253}$/
+
+// Lists accounts, or switches with `nebula switch`: it pins the account for new
+// sessions and, under the launcher, hands this session over so it resumes on
+// that account once the turn ends.
+async function switchAccount($: EngineInterface, state: State, account: string): Promise<string> {
+  if (account && !accountName.test(account)) return 'Name the account by its email or id.'
+  try {
+    const c = await companion($)
+    if (!c) return unconfigured
+    const switchFile = await $.env.get('NEBULA_SWITCH_FILE')
+    const current = await $.env.get('NEBULA_ACCOUNT_ID')
+    const env = { ...c.env, ...(switchFile ? { NEBULA_SWITCH_FILE: switchFile } : {}), ...(current ? { NEBULA_ACCOUNT_ID: current } : {}) }
+    const argv = [c.executable, 'switch']
+    if (account) argv.push('--session', await $.session.id(), account)
+    const result = await $.process.run(argv, { env, timeoutMs: 20000 })
+    if (result.exitCode !== 0) return (result.stderr.trim().split('\n').at(-1) ?? '').replace(/^\S+ \S+ /, '') || 'Nebula could not switch accounts.'
+    if (result.stdout.startsWith('Switching to ')) state.exitAfterTurn = true
+    return result.stdout.trim()
+  } catch {
+    return 'Nebula companion did not finish; the account was not switched.'
+  }
+}
+
 function sync($: EngineInterface, state: State): Promise<string> {
   if (state.syncing) return state.syncing
   state.syncing = call($, 'sync').finally(() => { state.syncing = undefined })
@@ -108,6 +133,16 @@ export function register(on: On) {
     await $.command.register({ name: 'nebula-sessions', description: 'List archived Nebula session revisions' })
     await $.command.register({ name: 'nebula-accounts', description: 'Report signed-in Claude accounts to Nebula' })
     await $.command.register({ name: 'nebula-login', description: 'Connect another Claude account with Claude sign-in' })
+    await $.command.register({ name: 'nebula-switch', description: 'List Claude accounts, or switch to one: /nebula-switch <email> (auto to unpin)' })
+    await $.tool.register({
+      name: 'switch_account',
+      description: 'List the Claude accounts Nebula can run this session on, or switch to one. Accounts can differ in access ' +
+        '(for example, only one may be approved for security work), so switch when the task needs an account this session lacks. ' +
+        'Call without an account to list them. With an account (its email, or a part of it only one account has) Nebula pins it ' +
+        'for new sessions; under the Nebula launcher in a terminal this conversation also resumes on it once your turn ends, so ' +
+        'finish your reply right after switching and let the user continue. Pass "auto" to unpin.',
+      inputSchema: { type: 'object', properties: { account: { type: 'string', description: 'Account email, a unique part of it, or "auto"' } } },
+    })
     void sync($, state)
     state.timer = $.clock.every(15000, () => { void sync($, state) })
     return next(e)
@@ -117,6 +152,17 @@ export function register(on: On) {
   on('command.run', { command: 'nebula-sessions' }, async ($) => ({ text: await call($, 'list') }))
   on('command.run', { command: 'nebula-accounts' }, async ($) => ({ text: await call($, 'accounts') }))
   on('command.run', { command: 'nebula-login' }, async ($) => ({ text: await login($, state) }))
+  on('command.run', { command: 'nebula-switch' }, async ($, e) => {
+    const text = await switchAccount($, state, e.args.trim())
+    // A command runs between turns: exit now rather than after the next one.
+    if (state.exitAfterTurn) { state.exitAfterTurn = false; $.ui.toast(text); await $.command.run({ command: 'exit' }) }
+    return { text }
+  })
+  on('tool.call', { tool: 'mcp__nebula__switch_account' }, async ($, e) => {
+    const input = (e as { input?: { account?: unknown } }).input
+    const account = typeof input?.account === 'string' ? input.account.trim() : ''
+    return { result: await switchAccount($, state, account) }
+  })
 
   on('classic.StopFailure', async ($, e, next) => {
     if (e.error === 'rate_limit' && e.agent_id === undefined) await onLimit($, state, e.session_id)

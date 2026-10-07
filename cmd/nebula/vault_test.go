@@ -231,3 +231,17 @@ func TestUsableTokenSignedOut(t *testing.T) {
 		t.Fatal("renewable sign-in not usable")
 	}
 }
+
+func TestFindAccount(t *testing.T) {
+	list := []accounts.Account{{ID: "a1", Identity: accounts.Identity{Email: "me@work.example"}}, {ID: "a2", Identity: accounts.Identity{Email: "me@home.example"}}}
+	for name, want := range map[string]string{"a2": "a2", "ME@work.example": "a1", "home": "a2"} {
+		if a, err := findAccount(list, name); err != nil || a.ID != want {
+			t.Fatalf("%s: %v %v", name, a.ID, err)
+		}
+	}
+	for _, name := range []string{"me@", "nobody"} {
+		if _, err := findAccount(list, name); err == nil {
+			t.Fatalf("%s matched", name)
+		}
+	}
+}

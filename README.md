@@ -112,6 +112,21 @@ Nothing is resubmitted: you continue the conversation. For T3 Code and `-p` runs
 the launcher hands over to Claude directly; the next session it starts uses
 another account.
 
+### Choosing an account
+
+Accounts can differ in more than their limits (one may have access the others
+lack), so the account can also be chosen by hand. `nebula switch` lists the
+connected accounts; `nebula switch <email>` (or a part of it only one account
+has) pins one on this device, and `nebula switch auto` unpins. The launcher
+starts new sessions on the pinned account while it has room, even one left out
+of automatic switching, then falls back to the usual order.
+
+In Claude Code the mod offers the same as `/nebula-switch [email]` and as a
+`switch_account` tool the agent can call when a task needs another account.
+Under the launcher in a terminal, switching also hands the running session over:
+Claude Code exits once the turn ends and the launcher resumes the conversation
+on the chosen account. In T3 Code and `-p` runs it applies to the next session.
+
 ## Session archive
 
 `nebula sync` archives every profile's transcripts; `--watch` repeats every ten

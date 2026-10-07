@@ -74,7 +74,7 @@ func parse(f *flag.FlagSet, args []string) error {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: nebula setup|update|init|serve|sync|login|accounts|claude|limited|list|fetch|restore")
+		return errors.New("usage: nebula setup|update|switch|init|serve|sync|login|accounts|claude|limited|list|fetch|restore")
 	}
 	args := os.Args[2:]
 	switch os.Args[1] {
@@ -92,6 +92,8 @@ func run() error {
 		return limitedCommand(args)
 	case "setup":
 		return setup(args)
+	case "switch":
+		return switchCommand(args)
 	case "update":
 		return updateCommand(args)
 	case "version", "--version":

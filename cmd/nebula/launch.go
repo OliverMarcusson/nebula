@@ -67,17 +67,17 @@ func lastChoiceFile() string {
 	return filepath.Join(dir, "Nebula", "last-profile")
 }
 
-// pick chooses the profile to run, skipping excluded accounts. Without the
-// server it reuses the last choice, then falls back to the home profile.
-func pick(ctx context.Context, exclude map[string]bool) (choice, error) {
+// localProfiles maps each account signed in on this device, with a token
+// Claude can use, to its profile; the first profile wins.
+func localProfiles() (map[string]profile, []profile, error) {
 	profiles, err := claudeProfiles(os.Getenv("NEBULA_PROFILES"))
 	if err != nil {
-		return choice{}, err
+		return nil, nil, err
 	}
 	local := map[string]profile{}
 	for _, p := range profiles {
 		if !usableToken(p) {
-			continue // a shared account whose token ran out while offline
+			continue // signed out, or a shared account whose token ran out while offline
 		}
 		if q, err := accounts.ReadLocal(p.Name, p.ConfigFile); err == nil && q != nil {
 			if _, dup := local[q.AccountUUID]; !dup {
@@ -85,16 +85,34 @@ func pick(ctx context.Context, exclude map[string]bool) (choice, error) {
 			}
 		}
 	}
-	home := profiles[0]
-	var list []accounts.Account
-	if c, err := newClient(); err == nil {
-		qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		err = c.call(qctx, "GET", "/v1/accounts", nil, &list)
-		cancel()
-		if err != nil {
-			list = nil
-		}
+	return local, profiles, nil
+}
+
+func serverAccounts(ctx context.Context) []accounts.Account {
+	c, err := newClient()
+	if err != nil {
+		return nil
 	}
+	var list []accounts.Account
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if c.call(qctx, "GET", "/v1/accounts", nil, &list) != nil {
+		return nil
+	}
+	return list
+}
+
+// pick chooses the profile to run, skipping excluded accounts. The account
+// pinned with `nebula switch` comes first while it has room, even when it is
+// left out of automatic switching. Without the server it reuses the last
+// choice, then falls back to the home profile.
+func pick(ctx context.Context, exclude map[string]bool) (choice, error) {
+	local, profiles, err := localProfiles()
+	if err != nil {
+		return choice{}, err
+	}
+	home := profiles[0]
+	list := serverAccounts(ctx)
 	if list == nil {
 		if raw, err := os.ReadFile(lastChoiceFile()); err == nil {
 			dir := strings.TrimSpace(string(raw))
@@ -106,12 +124,24 @@ func pick(ctx context.Context, exclude map[string]bool) (choice, error) {
 		}
 		return choice{profile: home}, nil
 	}
-	usable, limited := accounts.Candidates(list, func(id string) bool { _, ok := local[id]; return ok && !exclude[id] }, time.Now())
+	now := time.Now()
+	if id := pinnedAccount(); id != "" && !exclude[id] {
+		for _, a := range list {
+			p, here := local[a.ID]
+			if a.ID != id || a.State != accounts.Connected || !here || a.Limited(now) {
+				continue
+			}
+			if u := liveUsage(ctx, p); u == nil || !u.Exhausted(now) {
+				return choice{profile: p, account: &a}, nil
+			}
+		}
+	}
+	usable, limited := accounts.Candidates(list, func(id string) bool { _, ok := local[id]; return ok && !exclude[id] }, now)
 	for i := range usable {
 		a := usable[i]
 		p := local[a.ID]
 		// Recheck immediately before use with a live reading when one is available.
-		if u := liveUsage(ctx, p); u != nil && u.Exhausted(time.Now()) {
+		if u := liveUsage(ctx, p); u != nil && u.Exhausted(now) {
 			limited = append(limited, a)
 			continue
 		}
@@ -249,20 +279,32 @@ func launch(args []string) int {
 		var req struct {
 			SessionID string     `json:"session_id"`
 			ResetsAt  *time.Time `json:"resets_at"`
+			// Account is set by `nebula switch`, which also pinned it.
+			Account string `json:"account"`
 		}
 		if json.Unmarshal(raw, &req) != nil || req.SessionID == "" {
 			return code
 		}
-		if ch.account != nil {
+		if req.Account == "" && ch.account != nil {
 			exclude[ch.account.ID] = true
 			reportLimited(ctx, ch.account.ID, req.ResetsAt)
 		}
 		next, err := pick(ctx, exclude)
-		if err != nil || next.account == nil {
-			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit and no other connected account has room.\n", ch.label())
+		if err != nil && !errors.Is(err, errAllLimited) {
+			fmt.Fprintln(os.Stderr, "nebula:", err)
 			return code
 		}
-		fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit; resuming this session on %s\n", ch.label(), next.label())
+		switch {
+		case req.Account != "" && (next.account == nil || next.account.ID != req.Account):
+			fmt.Fprintf(os.Stderr, "nebula: the account to switch to is not available here; resuming this session on %s\n", next.label())
+		case req.Account != "":
+			fmt.Fprintf(os.Stderr, "nebula: resuming this session on %s\n", next.label())
+		case err != nil || next.account == nil:
+			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit and no other connected account has room.\n", ch.label())
+			return code
+		default:
+			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit; resuming this session on %s\n", ch.label(), next.label())
+		}
 		if managed, _ := managedDir(); filepath.Dir(next.profile.Dir) == managed {
 			_ = linkShared(next.profile.Dir)
 		}
