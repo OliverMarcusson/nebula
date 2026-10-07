@@ -45,6 +45,8 @@ Linux and Windows (amd64, arm64) alongside the server, which serves them at
 `GET /v1/update/{os}-{arch}` with the binary's SHA-256 as its ETag. The
 companion checks every hour, verifies the checksum, makes sure the new binary
 runs, swaps it in, and restarts; on Windows it also replaces the launcher copy.
+After a restart it reinstalls the Claude Code mod if the new binary carries a
+different one (devices set up with `--no-mod` are left alone).
 Deploying the server therefore updates every device within the hour. `nebula
 update` does the same at once, and is the only way a development build (`go
 build`, version `dev`) updates. A companion also restarts whenever its

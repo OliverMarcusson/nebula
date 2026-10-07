@@ -963,9 +963,12 @@ func syncSessions(args []string) error {
 	confirmed := map[string]string{}
 	reported := map[string]string{}
 	var sharedAt time.Time
-	updates := newUpdater(c)
+	var updates *updater
+	if *watch {
+		updates = newUpdater(c)
+	}
 	syncOnce := func() error {
-		if *watch {
+		if updates != nil {
 			updates.tick(ctx)
 		}
 		// Shared accounts first, so the report below includes new ones.

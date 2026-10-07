@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/olivermarcusson/nebula/mods"
 )
 
 // Devices follow the server: it serves companion binaries built from its own
@@ -221,8 +224,38 @@ func newUpdater(c *client) *updater {
 	if self, err := selfPath(); err == nil {
 		u.self = self
 		u.started, _ = os.Stat(self)
+		refreshMod(self)
 	}
 	return u
+}
+
+// refreshMod reinstalls the Claude Code mod when this binary embeds a
+// different one than setup installed, so an update brings its mod along.
+// Devices set up with --no-mod have no marketplace and are left alone.
+func refreshMod(bin string) {
+	market := filepath.Join(configDir(), "marketplace")
+	if _, err := os.Stat(market); err != nil {
+		return
+	}
+	// ponytail: compares embedded files only; a file the mod dropped lingers until setup.
+	stale := fs.WalkDir(mods.Nebula, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		want, _ := mods.Nebula.ReadFile(p)
+		if have, err := os.ReadFile(filepath.Join(market, filepath.FromSlash(p))); err != nil || !bytes.Equal(have, want) {
+			return fs.ErrInvalid
+		}
+		return nil
+	})
+	if stale == nil {
+		return
+	}
+	if err := installMod(bin); err != nil {
+		log.Print("Claude Code mod not updated: ", err)
+		return
+	}
+	log.Print("Updated the Claude Code mod")
 }
 
 func (u *updater) tick(ctx context.Context) {
