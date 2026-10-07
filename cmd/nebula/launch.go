@@ -99,7 +99,7 @@ func pick(ctx context.Context, exclude map[string]bool) (choice, error) {
 		if raw, err := os.ReadFile(lastChoiceFile()); err == nil {
 			dir := strings.TrimSpace(string(raw))
 			for _, p := range profiles {
-				if p.Dir == dir {
+				if p.Dir == dir && usableToken(p) {
 					return choice{profile: p}, nil
 				}
 			}

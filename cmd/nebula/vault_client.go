@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,13 +35,20 @@ func sharedAccount(dir string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// usableToken is false for a shared profile whose access token has expired:
-// it cannot renew, so Claude would only ask to sign in again.
+// usableToken is false for a profile Claude would only ask to sign in again:
+// one signed out (no token left, though .claude.json still names the
+// account), or a shared one whose access token has expired, since it cannot
+// renew. Without a credentials file the sign-in may be in the macOS keychain.
 func usableToken(p profile) bool {
-	if sharedAccount(p.Dir) == "" {
-		return true
-	}
 	c, err := readCredentials(p.Dir)
+	if sharedAccount(p.Dir) == "" {
+		if errors.Is(err, fs.ErrNotExist) {
+			return runtime.GOOS == "darwin"
+		}
+		if err == nil && c.RefreshToken != "" {
+			return true
+		}
+	}
 	return err == nil && time.UnixMilli(c.ExpiresAt).After(time.Now().Add(time.Minute))
 }
 

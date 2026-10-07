@@ -128,8 +128,8 @@ func localAccounts(list string) (accounts.Report, error) {
 		if err != nil {
 			return rep, err
 		}
-		if p == nil {
-			continue
+		if p == nil || !usableToken(pr) {
+			continue // signed out: not available on this device
 		}
 		// Prefer a live reading over Claude Code's cache when it is newer.
 		if u := liveUsage(context.Background(), pr); u != nil && (p.Usage == nil || u.ObservedAt.After(p.Usage.ObservedAt)) {

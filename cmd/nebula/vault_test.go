@@ -217,3 +217,17 @@ func TestSyncShared(t *testing.T) {
 		t.Fatalf("not retired: %v", shared())
 	}
 }
+
+func TestUsableTokenSignedOut(t *testing.T) {
+	dir := t.TempDir()
+	write := func(s string) { _ = os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(s), 0600) }
+	// Claude's sign-out leaves empty tokens while .claude.json keeps the account.
+	write(`{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}`)
+	if usableToken(profile{Dir: dir}) {
+		t.Fatal("signed-out profile counted as usable")
+	}
+	write(`{"claudeAiOauth":{"accessToken":"old","refreshToken":"rt","expiresAt":1}}`)
+	if !usableToken(profile{Dir: dir}) {
+		t.Fatal("renewable sign-in not usable")
+	}
+}
