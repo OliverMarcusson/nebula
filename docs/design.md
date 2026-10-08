@@ -107,9 +107,15 @@ the account beneath the CLI rather than registering one T3 Code provider
 instance per account. T3 Code's Claude settings include `binaryPath` and
 `homePath` (`CLAUDE_CONFIG_DIR`), seen in its installed settings schema, so a
 Nebula launcher (`nebula-claude`) in `binaryPath` execs the real `claude` with
-the selected profile. The launcher is built and tested with a stand-in CLI;
-running it under T3 Code itself, and whether T3 resumes a thread after its
-Claude process exits at a limit, are not yet validated.
+the selected profile. T3 Code keeps one Claude process per thread over
+stream-json, so the launcher stays between them rather than handing over:
+when Claude reports a request rejected at the account's limit, the turn ends
+as usual, then the launcher starts Claude on the next account with
+`--resume` for the same session, replays T3's initialize and settings control
+requests, and drops their duplicate answers. T3 Code keeps its connection and
+the next message continues on the new account; nothing is resubmitted. This is
+tested with a stand-in stream-json CLI; a switch under T3 Code itself is not
+yet observed.
 Transcripts land in the selected profile's `projects` directory, which
 `nebula sync` already archives. T3 Code's own thread database is not archived.
 

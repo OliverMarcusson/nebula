@@ -52,19 +52,3 @@ test('throttling without a full window does not switch', async ($, on) => {
   expect(seen.argv).toEqual([])
   expect(seen.exited).toBe(false)
 })
-
-test('in a headless host such as T3 Code, a usage limit restarts Claude Code after the turn', async ($, on) => {
-  const { NEBULA_SWITCH_FILE: _, ...rest } = env
-  mock.env(on, { ...rest, NEBULA_ACCOUNT_ID: 'acc-1' })
-  const seen = fakes(on, 100)
-  on('command.register', async () => ({ value: undefined }))
-  on('tool.register', async () => ({ value: undefined }))
-  on('clock.every', async () => ({ value: { cancel() {} } }))
-  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  await $.session.start({ cwd: '/w', surface: null, isInteractive: false } as never)
-  await $.classic.StopFailure({ error: 'rate_limit', session_id: 'sess-1' })
-  expect(seen.argv[1]).toBe('limited')
-  await $.turn.complete({ turnId: 't1', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
-  expect(seen.argv).toEqual(['/opt/nebula/bin/nebula', 'restart-claude'])
-  expect(seen.exited).toBe(false)
-})

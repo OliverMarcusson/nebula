@@ -111,10 +111,10 @@ records the limit on the server until the window resets. Under the launcher in a
 terminal, it also hands the session over and exits Claude Code, and the launcher
 resumes it with `--resume` on the next account, keeping flags such as `--model`.
 Nothing is resubmitted: you continue the conversation. T3 Code keeps one Claude
-Code process per thread, so there the mod ends that process once the limited
-turn is delivered (`nebula restart-claude`); send your message again and T3 Code
-starts Claude with `--resume`, which the launcher runs on the next account. For
-`-p` runs the next run uses another account.
+Code process per thread, so there the launcher stays between them: once the
+limited turn is delivered it starts Claude on the next account with `--resume`
+and replays T3 Code's setup, and your next message continues there. For `-p`
+runs the next run uses another account.
 
 ### Choosing an account
 

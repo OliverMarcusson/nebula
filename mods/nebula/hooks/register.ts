@@ -2,7 +2,7 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 
 // Only fixed companion commands; the one supplied argument, an account name
 // for `nebula switch`, is checked against a strict pattern first.
-type State = { timer?: Timer; syncing?: Promise<string>; signingIn?: boolean; limited?: boolean; exitAfterTurn?: boolean; headless?: boolean; restartAfterTurn?: boolean }
+type State = { timer?: Timer; syncing?: Promise<string>; signingIn?: boolean; limited?: boolean; exitAfterTurn?: boolean }
 type Companion = { executable: string; projects?: string; env: Record<string, string> }
 
 const unconfigured = 'Nebula is not set up: run nebula setup, or set an absolute NEBULA_COMPANION_PATH.'
@@ -90,12 +90,9 @@ async function onLimit($: EngineInterface, state: State, sessionId: string) {
     await $.fs.write(switchFile, JSON.stringify({ session_id: sessionId, ...(resetsAt ? { resets_at: resetsAt } : {}) }))
     $.ui.toast('Usage limit reached. Nebula is resuming this session on your next account.')
     state.exitAfterTurn = true // /exit cannot run while this turn is held; turn.complete runs it
-  } else if (state.headless && await $.env.get('NEBULA_ACCOUNT_ID')) {
-    // Under the launcher in T3 Code: the host keeps this process for the
-    // thread, so end it once the turn is out; the next message starts it again
-    // with --resume and the launcher picks the next account.
-    state.restartAfterTurn = true
-    $.ui.toast('Usage limit reached. Send your message again to continue on your next account.')
+  } else if (await $.env.get('NEBULA_STREAM')) {
+    // Under T3 Code: the launcher replaces this process once the turn ends.
+    $.ui.toast('Usage limit reached. If another account has room, your next message continues this session on it.')
   } else {
     $.ui.toast('Usage limit reached. New sessions started with nebula claude will use another account.')
   }
@@ -135,7 +132,6 @@ export function register(on: On) {
   const state: State = {}
   on('session.start', async ($, e, next) => {
     state.timer?.cancel()
-    state.headless = !e.isInteractive
     await $.command.register({ name: 'nebula-sync', description: 'Upload complete session records to Nebula' })
     await $.command.register({ name: 'nebula-sessions', description: 'List archived Nebula session revisions' })
     await $.command.register({ name: 'nebula-accounts', description: 'Report signed-in Claude accounts to Nebula' })
@@ -181,13 +177,6 @@ export function register(on: On) {
     if (state.exitAfterTurn) {
       state.exitAfterTurn = false
       await $.command.run({ command: 'exit' })
-    }
-    if (state.restartAfterTurn) {
-      state.restartAfterTurn = false
-      const c = await companion($)
-      if (c) {
-        try { await $.process.run([c.executable, 'restart-claude'], { env: c.env, timeoutMs: 10000 }) } catch { /* stays on this account */ }
-      }
     }
     return result
   })
