@@ -194,8 +194,17 @@ func installBinary(path string, data []byte) error {
 		return errors.New("downloaded binary does not run on this device")
 	}
 	if runtime.GOOS == "windows" {
+		// Earlier updates leave .old files, free once their processes exit;
+		// an open T3 Code thread can hold a launcher for days, so the one
+		// moved aside now gets a fresh name when .old is still taken.
+		leftovers, _ := filepath.Glob(path + ".old*")
+		for _, f := range leftovers {
+			os.Remove(f)
+		}
 		old := path + ".old"
-		os.Remove(old) // left by the previous update; free once that process exited
+		if _, err := os.Stat(old); err == nil {
+			old = fmt.Sprintf("%s.old-%d", path, time.Now().UnixNano())
+		}
 		if err := os.Rename(path, old); err != nil {
 			os.Remove(tmp)
 			return err
