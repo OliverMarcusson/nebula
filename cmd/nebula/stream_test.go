@@ -21,6 +21,13 @@ func TestFakeStreamClaude(t *testing.T) {
 		t.Skip("helper process")
 	}
 	out := json.NewEncoder(os.Stdout)
+	if os.Getenv("FAKE_NOISY") != "" {
+		// Like Claude Code's startup hooks: more output than a pipe holds,
+		// written before reading any input.
+		for range 64 {
+			_ = out.Encode(map[string]string{"type": "system", "subtype": "hook_response", "output": strings.Repeat("x", 4096)})
+		}
+	}
 	r := bufio.NewReader(os.Stdin)
 	for {
 		line, err := r.ReadBytes('\n')
@@ -83,14 +90,23 @@ func (h *streamHost) read() map[string]any {
 	}
 }
 
-func startStream(t *testing.T, next nextProcess) (*streamHost, chan int) {
+func startStream(t *testing.T, next nextProcess, env ...string) (*streamHost, chan int) {
+	return startStreamWith(t, next, nil, env...)
+}
+
+// startStreamWith has prelude already queued from the host when Claude
+// starts, as when T3 Code writes its first messages straight away.
+func startStreamWith(t *testing.T, next nextProcess, prelude []byte, env ...string) (*streamHost, chan int) {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	p := &streamProxy{claude: os.Args[0], host: inR, out: outW, next: next}
+	if prelude != nil {
+		p.queue = [][]byte{prelude}
+	}
 	args := []string{"-test.run=^TestFakeStreamClaude$", "--", "--output-format", "stream-json", "--input-format", "stream-json", "--session-id=sess-1", "--model", "opus"}
 	done := make(chan int, 1)
 	go func() {
-		done <- p.run(args, append(os.Environ(), "FAKE_ACCOUNT=first"))
+		done <- p.run(args, append(append(os.Environ(), "FAKE_ACCOUNT=first"), env...))
 		outW.Close()
 	}()
 	return &streamHost{t: t, in: inW, out: bufio.NewReader(outR)}, done
@@ -152,6 +168,24 @@ func TestStreamStaysWithoutAnotherAccount(t *testing.T) {
 	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "continue"}})
 	if m := h.read(); !strings.HasPrefix(fmt.Sprint(m["result"]), "first ") {
 		t.Fatalf("expected the same process to answer, got %v", m)
+	}
+	h.in.Close()
+	<-done
+}
+
+// A host's first request can exceed a pipe's buffer (T3 Code's initialize
+// is 8 KiB; Windows pipes hold 4 KiB) while Claude is still writing its
+// startup output: neither side may wait on the other.
+func TestStreamLargeMessagesDoNotDeadlock(t *testing.T) {
+	init, _ := json.Marshal(map[string]any{"type": "control_request", "request_id": "r1", "request": map[string]any{"subtype": "initialize", "systemPrompt": strings.Repeat("y", 256<<10)}})
+	h, done := startStreamWith(t, func(string, *time.Time) ([]string, []string, bool) { return nil, nil, false }, append(init, '\n'), "FAKE_NOISY=1")
+	for range 64 {
+		if m := h.read(); m["subtype"] != "hook_response" {
+			t.Fatalf("expected startup output, got %v", m)
+		}
+	}
+	if m := h.read(); m["type"] != "control_response" {
+		t.Fatalf("initialize answered with %v", m)
 	}
 	h.in.Close()
 	<-done

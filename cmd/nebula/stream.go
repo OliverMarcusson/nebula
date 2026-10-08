@@ -200,7 +200,7 @@ func (p *streamProxy) run(args, env []string) int {
 			fmt.Fprintln(os.Stderr, "nebula:", err)
 			return 1
 		}
-		p.attach(cmd, stdin, !first)
+		p.attach(cmd, newQueuedWriter(stdin), !first)
 		nextArgs, nextEnv, switching := p.pump(stdout)
 		err = cmd.Wait()
 		code := 0
@@ -213,13 +213,73 @@ func (p *streamProxy) run(args, env []string) int {
 			code = exit.ExitCode()
 		}
 		p.mu.Lock()
-		p.draining, p.cmd = nil, nil
+		for _, w := range []io.WriteCloser{p.draining, p.stdin} {
+			if w != nil {
+				_ = w.Close()
+			}
+		}
+		p.draining, p.stdin, p.cmd = nil, nil, nil
 		p.mu.Unlock()
 		if !switching {
 			return code
 		}
 		args, env = nextArgs, nextEnv
 	}
+}
+
+// queuedWriter writes to a process's stdin from its own goroutine. A pipe
+// holds little (4 KiB on Windows), and Claude reads its input only while it
+// is not itself blocked writing output, so writes must never wait while the
+// proxy holds its lock or before it reads Claude's output.
+type queuedWriter struct {
+	mu     sync.Mutex
+	ready  *sync.Cond
+	lines  [][]byte
+	closed bool
+}
+
+func newQueuedWriter(w io.WriteCloser) *queuedWriter {
+	q := &queuedWriter{}
+	q.ready = sync.NewCond(&q.mu)
+	go func() {
+		for {
+			q.mu.Lock()
+			for len(q.lines) == 0 && !q.closed {
+				q.ready.Wait()
+			}
+			lines, closed := q.lines, q.closed
+			q.lines = nil
+			q.mu.Unlock()
+			for _, line := range lines {
+				_, _ = w.Write(line) // after the process is gone, lines are dropped
+			}
+			if closed && len(lines) == 0 {
+				_ = w.Close()
+				return
+			}
+		}
+	}()
+	return q
+}
+
+func (q *queuedWriter) Write(b []byte) (int, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return 0, io.ErrClosedPipe
+	}
+	q.lines = append(q.lines, slices.Clone(b))
+	q.ready.Signal()
+	return len(b), nil
+}
+
+// Close closes the stdin once everything queued before it is written.
+func (q *queuedWriter) Close() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	q.ready.Signal()
+	return nil
 }
 
 // attach makes a started process the one the host talks to. A replacement
