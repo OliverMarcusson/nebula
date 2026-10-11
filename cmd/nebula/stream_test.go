@@ -13,8 +13,8 @@ import (
 )
 
 // TestFakeStreamClaude is not a test: run as a child process, it plays a
-// stream-json Claude Code signed in to FAKE_ACCOUNT, whose limit any message
-// containing "hit limit" reaches.
+// stream-json Claude Code signed in to FAKE_ACCOUNT. The first account's
+// limit is reached by "hit limit"; FAKE_ALWAYS_LIMIT exhausts replacements.
 func TestFakeStreamClaude(t *testing.T) {
 	account := os.Getenv("FAKE_ACCOUNT")
 	if account == "" {
@@ -35,6 +35,7 @@ func TestFakeStreamClaude(t *testing.T) {
 			var l struct {
 				Type      string `json:"type"`
 				RequestID string `json:"request_id"`
+				UUID      string `json:"uuid"`
 				Request   struct {
 					Subtype string `json:"subtype"`
 				} `json:"request"`
@@ -46,11 +47,19 @@ func TestFakeStreamClaude(t *testing.T) {
 			switch {
 			case l.Type == "control_request":
 				_ = out.Encode(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": l.RequestID, "response": map[string]string{"account": account, "handled": l.Request.Subtype}}})
-			case l.Type == "user" && strings.Contains(l.Message.Content, "hit limit"):
+			case l.Type == "user" && (account == "first" && strings.Contains(l.Message.Content, "hit limit") || os.Getenv("FAKE_ALWAYS_LIMIT") != ""):
+				_ = out.Encode(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": "work already completed"}})
+				_ = out.Encode(map[string]any{"type": "assistant", "error": "rate_limit", "message": map[string]any{"role": "assistant", "content": "Usage limit reached"}})
 				_ = out.Encode(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "resetsAt": 1791471600}})
 				_ = out.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": true, "session_id": "sess-1"})
+			case l.Type == "user" && l.Message.Content == "throttle":
+				_ = out.Encode(map[string]any{"type": "assistant", "error": "rate_limit"})
+				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "session_id": "sess-1"})
 			case l.Type == "user":
-				_ = out.Encode(map[string]any{"type": "result", "subtype": "success", "result": account + " " + strings.Join(os.Args[2:], " "), "session_id": "sess-1"})
+				if l.UUID != "" {
+					_ = out.Encode(map[string]any{"type": "user", "uuid": l.UUID, "message": map[string]any{"role": "user", "content": l.Message.Content}})
+				}
+				_ = out.Encode(map[string]any{"type": "result", "subtype": "success", "result": account + " " + strings.Join(os.Args[2:], " "), "prompt": l.Message.Content, "session_id": "sess-1"})
 			}
 		}
 		if err != nil {
@@ -127,16 +136,12 @@ func TestStreamSwitchesAccountAfterLimit(t *testing.T) {
 	h.send(map[string]any{"type": "control_request", "request_id": "r2", "request": map[string]any{"subtype": "set_model", "model": "sonnet"}})
 	h.read()
 	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hit limit"}})
-	if m := h.read(); m["type"] != "rate_limit_event" {
-		t.Fatalf("expected the rate limit event, got %v", m)
+	if m := h.read(); m["type"] != "assistant" || m["error"] != nil {
+		t.Fatalf("expected completed work to remain visible, got %v", m)
 	}
-	if m := h.read(); m["type"] != "result" {
-		t.Fatalf("expected the failed turn's result, got %v", m)
-	}
-	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "continue"}})
 	m := h.read()
-	if m["type"] != "result" {
-		t.Fatalf("expected the next turn's result (replayed answers must not reach the host), got %v", m)
+	if m["type"] != "result" || m["is_error"] == true || m["prompt"] != continuePrompt {
+		t.Fatalf("expected automatic completion without errors, replayed answers, or synthetic user echoes, got %v", m)
 	}
 	result, _ := m["result"].(string)
 	fields := strings.Fields(result)
@@ -163,11 +168,108 @@ func TestStreamSwitchesAccountAfterLimit(t *testing.T) {
 func TestStreamStaysWithoutAnotherAccount(t *testing.T) {
 	h, done := startStream(t, func(string, *time.Time) ([]string, []string, bool) { return nil, nil, false })
 	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hit limit"}})
-	h.read()
-	h.read()
+	for _, typ := range []string{"assistant", "assistant", "rate_limit_event", "result"} {
+		if m := h.read(); m["type"] != typ {
+			t.Fatalf("expected exhausted account failure %q, got %v", typ, m)
+		}
+	}
 	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "continue"}})
 	if m := h.read(); !strings.HasPrefix(fmt.Sprint(m["result"]), "first ") {
 		t.Fatalf("expected the same process to answer, got %v", m)
+	}
+	h.in.Close()
+	<-done
+}
+
+func TestStreamContinuesAcrossSeveralLimitedAccounts(t *testing.T) {
+	switches := 0
+	h, done := startStream(t, func(session string, _ *time.Time) ([]string, []string, bool) {
+		switches++
+		env := append(os.Environ(), fmt.Sprintf("FAKE_ACCOUNT=account-%d", switches))
+		if switches == 1 {
+			env = append(env, "FAKE_ALWAYS_LIMIT=1")
+		}
+		return []string{"-test.run=^TestFakeStreamClaude$", "--", "--resume=" + session}, env, true
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hit limit"}})
+	for range 2 {
+		if m := h.read(); m["type"] != "assistant" || m["error"] != nil {
+			t.Fatalf("expected completed work, got %v", m)
+		}
+	}
+	if m := h.read(); m["type"] != "result" || !strings.HasPrefix(fmt.Sprint(m["result"]), "account-2 ") || m["prompt"] != continuePrompt {
+		t.Fatalf("expected automatic completion on the third account, got %v", m)
+	}
+	h.in.Close()
+	<-done
+}
+
+func TestStreamStopsWhenReplacementIsAlsoLimited(t *testing.T) {
+	switches := 0
+	h, done := startStream(t, func(session string, _ *time.Time) ([]string, []string, bool) {
+		switches++
+		if switches > 1 {
+			return nil, nil, false
+		}
+		return []string{"-test.run=^TestFakeStreamClaude$", "--", "--resume=" + session}, append(os.Environ(), "FAKE_ACCOUNT=second", "FAKE_ALWAYS_LIMIT=1"), true
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hit limit"}})
+	for _, typ := range []string{"assistant", "assistant", "assistant", "rate_limit_event", "result"} {
+		if m := h.read(); m["type"] != typ || typ == "result" && m["is_error"] != true {
+			t.Fatalf("expected the final exhausted account failure, got %v", m)
+		}
+	}
+	h.in.Close()
+	<-done
+}
+
+func TestStreamDoesNotSwitchForUnconfirmedThrottling(t *testing.T) {
+	h, done := startStream(t, func(string, *time.Time) ([]string, []string, bool) {
+		t.Error("ordinary throttling must not switch accounts")
+		return nil, nil, false
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "throttle"}})
+	if m := h.read(); m["type"] != "assistant" || m["error"] != "rate_limit" {
+		t.Fatalf("expected the throttling error, got %v", m)
+	}
+	if m := h.read(); m["type"] != "result" || m["is_error"] != true {
+		t.Fatalf("expected the failed result, got %v", m)
+	}
+	h.in.Close()
+	<-done
+}
+
+func TestStreamContinuesAfterHostEOF(t *testing.T) {
+	h, done := startStream(t, func(session string, _ *time.Time) ([]string, []string, bool) {
+		return []string{"-test.run=^TestFakeStreamClaude$", "--", "--resume=" + session}, append(os.Environ(), "FAKE_ACCOUNT=second"), true
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hit limit"}})
+	h.in.Close()
+	h.read()
+	if m := h.read(); m["type"] != "result" || m["prompt"] != continuePrompt {
+		t.Fatalf("expected automatic completion after host EOF, got %v", m)
+	}
+	<-done
+}
+
+func TestStreamInterruptDuringSwitchDoesNotContinue(t *testing.T) {
+	selecting, selected := make(chan struct{}), make(chan struct{})
+	h, done := startStream(t, func(session string, _ *time.Time) ([]string, []string, bool) {
+		close(selecting)
+		<-selected
+		return []string{"-test.run=^TestFakeStreamClaude$", "--", "--resume=" + session}, append(os.Environ(), "FAKE_ACCOUNT=second"), true
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hit limit"}})
+	h.read()
+	<-selecting
+	h.send(map[string]any{"type": "control_request", "request_id": "cancel", "request": map[string]string{"subtype": "interrupt"}})
+	// A later request is a barrier: readHost handles the interrupt before it.
+	h.send(map[string]any{"type": "control_request", "request_id": "barrier", "request": map[string]string{"subtype": "set_model", "model": "opus"}})
+	close(selected)
+	for _, typ := range []string{"assistant", "rate_limit_event", "result", "control_response", "control_response"} {
+		if m := h.read(); m["type"] != typ {
+			t.Fatalf("expected cancellation without automatic continuation, got %v", m)
+		}
 	}
 	h.in.Close()
 	<-done

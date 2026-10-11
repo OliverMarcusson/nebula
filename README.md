@@ -109,12 +109,15 @@ A usage limit is a `rate_limit` failure that the session's own limit readings
 confirm (a window at 100%); ordinary throttling never switches. The mod then
 records the limit on the server until the window resets. Under the launcher in a
 terminal, it also hands the session over and exits Claude Code, and the launcher
-resumes it with `--resume` on the next account, keeping flags such as `--model`.
-Nothing is resubmitted: you continue the conversation. T3 Code keeps one Claude
-Code process per thread, so there the launcher stays between them: once the
-limited turn is delivered it starts Claude on the next account with `--resume`
-and replays T3 Code's setup, and your next message continues there. For `-p`
-runs the next run uses another account.
+resumes it with `--resume` on the next account, keeping flags such as `--model`,
+and automatically asks Claude to finish the unfinished task from the saved
+conversation. Completed tool actions and the original request are not replayed.
+T3 Code keeps one Claude Code process per thread, so there the launcher stays
+between them: it withholds the recoverable limit failure, starts Claude on the
+next account with `--resume`, replays T3 Code's setup, and continues the task
+within the same turn. Nebula gives a switch notice; no continue prompt is needed.
+If all eligible accounts are exhausted, the failure is shown and work stops.
+For `-p` runs without streaming input, the next run uses another account.
 
 ### Choosing an account
 

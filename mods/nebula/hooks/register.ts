@@ -84,15 +84,15 @@ async function onLimit($: EngineInterface, state: State, sessionId: string) {
     try { await $.process.run(argv, { env: c.env, timeoutMs: 20000 }) } catch { /* the launcher reports it too */ }
   }
   // Under the Nebula launcher: hand the session over and exit, so it resumes
-  // on the next account. Nothing is resubmitted; the user continues.
+  // on the next account and continues the unfinished task automatically.
   const switchFile = await $.env.get('NEBULA_SWITCH_FILE')
   if (switchFile) {
-    await $.fs.write(switchFile, JSON.stringify({ session_id: sessionId, ...(resetsAt ? { resets_at: resetsAt } : {}) }))
-    $.ui.toast('Usage limit reached. Nebula is resuming this session on your next account.')
+    await $.fs.write(switchFile, JSON.stringify({ session_id: sessionId, continue: true, ...(resetsAt ? { resets_at: resetsAt } : {}) }))
+    $.ui.toast('Usage limit reached. Nebula is switching accounts and continuing your task automatically.')
     state.exitAfterTurn = true // /exit cannot run while this turn is held; turn.complete runs it
   } else if (await $.env.get('NEBULA_STREAM')) {
     // Under T3 Code: the launcher replaces this process once the turn ends.
-    $.ui.toast('Usage limit reached. If another account has room, your next message continues this session on it.')
+    $.ui.toast('Usage limit reached. Nebula will switch to another account with room and continue your task automatically.')
   } else {
     $.ui.toast('Usage limit reached. New sessions started with nebula claude will use another account.')
   }

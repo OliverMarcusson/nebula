@@ -28,7 +28,7 @@ import (
 // In an interactive terminal it also supervises: when the Nebula mod sees the
 // account hit its usage limit it records the session in NEBULA_SWITCH_FILE
 // and exits Claude Code; the launcher then resumes that session on the next
-// account. It never resubmits a prompt; the user continues the conversation.
+// account, with a continuation to finish the interrupted task.
 
 // realClaude finds the Claude Code CLI, skipping this executable when it is
 // installed under the same name.
@@ -262,7 +262,7 @@ func launch(args []string) int {
 
 	// The terminal delivers Ctrl-C to Claude directly; the launcher stays up.
 	signal.Ignore(os.Interrupt)
-	for attempt := 0; ; attempt++ {
+	for {
 		cmd := exec.Command(claude, args...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		cmd.Env = ch.env(switchFile)
@@ -277,7 +277,7 @@ func launch(args []string) int {
 			code = exit.ExitCode()
 		}
 		raw, err := os.ReadFile(switchFile)
-		if err != nil || attempt >= 4 {
+		if err != nil {
 			return code
 		}
 		_ = os.Remove(switchFile)
@@ -285,7 +285,8 @@ func launch(args []string) int {
 			SessionID string     `json:"session_id"`
 			ResetsAt  *time.Time `json:"resets_at"`
 			// Account is set by `nebula switch`, which also pinned it.
-			Account string `json:"account"`
+			Account  string `json:"account"`
+			Continue bool   `json:"continue"`
 		}
 		if json.Unmarshal(raw, &req) != nil || req.SessionID == "" {
 			return code
@@ -308,12 +309,15 @@ func launch(args []string) int {
 			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit and no other connected account has room.\n", ch.label())
 			return code
 		default:
-			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit; resuming this session on %s\n", ch.label(), next.label())
+			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit; continuing this task on %s\n", ch.label(), next.label())
 		}
 		if managed, _ := managedDir(); filepath.Dir(next.profile.Dir) == managed {
 			_ = linkShared(next.profile.Dir)
 		}
 		ch, args = next, resumeArgs(args, req.SessionID)
+		if req.Continue {
+			args = append(args, continuePrompt)
+		}
 	}
 }
 

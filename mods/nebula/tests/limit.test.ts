@@ -39,7 +39,7 @@ test('a confirmed usage limit records it, hands the session over, and exits', as
   const seen = fakes(on, 100)
   await $.classic.StopFailure({ error: 'rate_limit', session_id: 'sess-1' })
   expect(seen.argv).toEqual(['/opt/nebula/bin/nebula', 'limited', '--resets-at', '2026-10-07T03:00:00Z'])
-  expect(JSON.parse(seen.written)).toEqual({ session_id: 'sess-1', resets_at: '2026-10-07T03:00:00Z' })
+  expect(JSON.parse(seen.written)).toEqual({ session_id: 'sess-1', continue: true, resets_at: '2026-10-07T03:00:00Z' })
   expect(seen.exited).toBe(false)
   await $.turn.complete({ turnId: 't1', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
   expect(seen.exited).toBe(true)

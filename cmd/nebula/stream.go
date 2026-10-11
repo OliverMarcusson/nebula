@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,11 +24,13 @@ import (
 // to it in stream-json on stdin and stdout. Handing that process over with
 // exec would leave the thread on one account for its whole life, so the
 // launcher stays between them instead. When Claude reports that the account's
-// limit rejected a request, the turn ends as usual; the launcher then
+// limit rejected a request, the launcher hides the failed turn's ending and
 // replaces the process with one on the next account that resumes the same
 // session, and replays the host's initialize and settings requests so the
-// host does not notice. Nothing is resubmitted: the host's next message
-// continues the conversation on the new account.
+// host stays in the same turn. A continuation asks Claude to finish the
+// unfinished task using the saved conversation, without replaying the request.
+
+const continuePrompt = "Continue the unfinished task from where you stopped before the usage limit. Use the existing conversation and completed tool results; do not restart the task or repeat completed actions."
 
 // streamJSON reports whether the host drives Claude over stream-json.
 func streamJSON(args []string) bool {
@@ -82,6 +85,9 @@ type streamLine struct {
 	Type      string          `json:"type"`
 	RequestID string          `json:"request_id"`
 	SessionID string          `json:"session_id"`
+	UUID      string          `json:"uuid"`
+	Error     string          `json:"error"`
+	IsError   bool            `json:"is_error"`
 	Request   json.RawMessage `json:"request"`
 	Response  struct {
 		RequestID string `json:"request_id"`
@@ -121,27 +127,35 @@ type streamProxy struct {
 	out    io.Writer
 	next   nextProcess
 
-	mu        sync.Mutex
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser // nil while the process is being replaced
-	draining  io.WriteCloser // a process on hold or being replaced; it gets only answers to its requests
-	pending   map[string]bool
-	queue     [][]byte
-	state     []stateRequest
-	replayed  map[string]bool
-	replays   int
-	hostEnded bool
+	mu             sync.Mutex
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser // nil while the process is being replaced
+	draining       io.WriteCloser // a process on hold or being replaced; it gets only answers to its requests
+	pending        map[string]bool
+	queue          [][]byte
+	state          []stateRequest
+	replayed       map[string]bool
+	replays        int
+	hostEnded      bool
+	interrupted    bool
+	continuationID string
+	recovering     bool // only accessed by pump and its next callback
 }
 
 func superviseStream(claude string, args []string, ch choice) int {
 	p := &streamProxy{claude: claude, host: os.Stdin, out: os.Stdout}
 	ctx := context.Background()
+	exclude := map[string]bool{}
 	p.next = func(session string, resetsAt *time.Time) ([]string, []string, bool) {
 		if ch.account == nil {
 			return nil, nil, false
 		}
 		reportLimited(ctx, ch.account.ID, resetsAt)
-		next, err := pick(ctx, map[string]bool{ch.account.ID: true})
+		if !p.recovering {
+			exclude = map[string]bool{}
+		}
+		exclude[ch.account.ID] = true
+		next, err := pick(ctx, exclude)
 		if err != nil || next.account == nil {
 			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit and no other connected account has room.\n", ch.label())
 			return nil, nil, false
@@ -334,14 +348,20 @@ func (p *streamProxy) readHost() {
 }
 
 func (p *streamProxy) fromHost(line []byte) {
-	l, _ := lineType(line, "control_request", "control_response")
+	l, _ := lineType(line, "control_request", "control_response", "user")
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if l.Type == "user" {
+		p.interrupted = false
+	}
 	if l.Type == "control_request" {
 		var req struct {
 			Subtype string `json:"subtype"`
 		}
 		_ = json.Unmarshal(l.Request, &req)
+		if req.Subtype == "interrupt" {
+			p.interrupted = true
+		}
 		if slices.Contains(stateRequests, req.Subtype) {
 			p.state = slices.DeleteFunc(p.state, func(s stateRequest) bool { return s.subtype == req.Subtype })
 		}
@@ -369,16 +389,17 @@ func (p *streamProxy) fromHost(line []byte) {
 }
 
 // pump forwards Claude's lines to the host until Claude exits. When a
-// request was rejected at the account's limit, it decides at the end of
-// that turn whether to replace the process, then lets the old one finish.
+// request was rejected at the account's limit, it withholds that failure
+// until it knows whether another account can finish the same host turn.
 func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switching bool) {
 	r := bufio.NewReaderSize(stdout, 1<<16)
 	var limitedUntil *time.Time
 	limited := false
+	var failure [][]byte
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
-			l, _ := lineType(line, "rate_limit_event", "result", "control_request", "control_response")
+			l, _ := lineType(line, "rate_limit_event", "assistant", "user", "result", "control_request", "control_response")
 			forward := true
 			switch l.Type {
 			case "rate_limit_event":
@@ -388,7 +409,18 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 						t := time.Unix(l.RateLimit.ResetsAt, 0)
 						limitedUntil = &t
 					}
+					failure = append(failure, slices.Clone(line))
+					forward = false
 				}
+			case "assistant":
+				if l.Error == "rate_limit" {
+					failure = append(failure, slices.Clone(line))
+					forward = false
+				}
+			case "user":
+				p.mu.Lock()
+				forward = l.UUID == "" || l.UUID != p.continuationID
+				p.mu.Unlock()
 			case "control_request":
 				p.mu.Lock()
 				p.pending[l.RequestID] = true
@@ -401,27 +433,65 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 				}
 				p.mu.Unlock()
 			}
-			decide := l.Type == "result" && limited && !switching && l.SessionID != ""
+			decide := l.Type == "result" && l.IsError && limited && !switching && l.SessionID != ""
 			if decide {
-				// Before the host sees the turn end and sends its next message.
 				p.hold()
-			}
-			if forward {
-				_, _ = p.out.Write(line)
-			}
-			if decide {
-				limited = false
-				if nextArgs, nextEnv, switching = p.next(l.SessionID, limitedUntil); switching {
+				p.mu.Lock()
+				interrupted := p.interrupted
+				p.mu.Unlock()
+				if !interrupted {
+					nextArgs, nextEnv, switching = p.next(l.SessionID, limitedUntil)
+				}
+				if switching {
+					forward = !p.continueTurn(l.SessionID)
+					p.recovering = !forward
 					p.retire()
 				} else {
 					p.release()
 				}
 			}
+			if l.Type == "result" {
+				if forward {
+					for _, failed := range failure {
+						_, _ = p.out.Write(failed)
+					}
+					p.recovering = false
+				}
+				failure, limited, limitedUntil = nil, false, nil
+			}
+			if forward {
+				_, _ = p.out.Write(line)
+			}
 		}
 		if err != nil {
+			for _, failed := range failure {
+				_, _ = p.out.Write(failed)
+			}
 			return nextArgs, nextEnv, switching
 		}
 	}
+}
+
+// continueTurn queues a fresh continuation before messages received during
+// handoff. The original user request and completed tools remain in the session.
+// An interrupt received during account selection must not restart the work.
+func (p *streamProxy) continueTurn(session string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.interrupted {
+		return false
+	}
+	var id [16]byte
+	_, _ = rand.Read(id[:])
+	id[6], id[8] = id[6]&0x0f|0x40, id[8]&0x3f|0x80
+	p.continuationID = fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
+	line, _ := json.Marshal(map[string]any{
+		"type": "user", "session_id": session, "uuid": p.continuationID,
+		"parent_tool_use_id": nil,
+		"message":            map[string]string{"role": "user", "content": continuePrompt},
+	})
+	p.queue = append([][]byte{append(line, '\n')}, p.queue...)
+	return true
 }
 
 // hold stops sending the host's messages to the current process while the
