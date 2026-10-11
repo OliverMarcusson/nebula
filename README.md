@@ -81,9 +81,12 @@ logged, or sent anywhere but Anthropic. In the dashboard, connected accounts can
 be reordered, opted out of switching, or disconnected.
 
 The server polls shared accounts once for all devices, independently of token
-renewal. Failed usage requests retry after fifteen seconds. The dashboard checks
-every fifteen seconds and when the tab becomes active; readings older than two
-minutes or past a window's reset are shown as unavailable while refresh retries.
+renewal. Failed usage requests use exponential backoff with jitter, up to fifteen
+minutes; HTTP 429 starts at roughly two minutes. Claude's `Retry-After` header is
+always respected, including longer delays, and success clears the backoff. The
+dashboard checks every fifteen seconds and when the tab becomes active; readings
+older than two minutes or past a window's reset are shown as unavailable while
+refresh retries.
 Old percentages and reset offers are never presented as current.
 
 ### Shared accounts

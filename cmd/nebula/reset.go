@@ -64,7 +64,9 @@ func redeem(ctx context.Context, list string, r resets.Reset) (state, msg string
 			if _, err := accessToken(credentialsFile(p)); err == nil {
 				file = credentialsFile(p)
 				usageCache.Lock()
-				delete(usageCache.entries, p.Dir) // report the result on the next sync
+				if cached := usageCache.entries[p.Dir]; cached != nil && cached.failures == 0 && cached.done == nil {
+					delete(usageCache.entries, p.Dir) // preserve provider cooldowns
+				}
 				usageCache.Unlock()
 				break
 			}
@@ -88,7 +90,7 @@ func redeem(ctx context.Context, list string, r resets.Reset) (state, msg string
 	payload, _ := json.Marshal(map[string]string{"program": "cedar_ember", "grant_id": r.GrantID, "request_id": r.ID})
 	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	body, status, err := anthropic(rctx, file, "POST", fmt.Sprintf(resetURL, r.OrganizationID), bytes.NewReader(payload))
+	body, status, _, err := anthropic(rctx, file, "POST", fmt.Sprintf(resetURL, r.OrganizationID), bytes.NewReader(payload))
 	switch {
 	case err != nil || status >= 500:
 		return resets.Unknown, "No clear answer from Claude; check the account's usage before trying again"
