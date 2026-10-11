@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, AuthError, token, type Account, type SessionRecord } from "./api";
 import { devicesOf, groupSessions, parseTranscript, type Device, type Session, type Transcript } from "./model";
 
@@ -22,13 +22,17 @@ export function useDashboard(owner: string, onAuthLost: () => void): Dashboard {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshedAt, setRefreshedAt] = useState(0);
+  const refreshing = useRef(false);
 
   const refresh = useCallback(() => {
+    if (refreshing.current) return;
+    refreshing.current = true;
     setLoading(true);
-    Promise.all([api.sessions(), api.accounts()])
-      .then(([list, accs]) => {
-        setSessions(groupSessions(list));
-        setAccounts(accs);
+    // Update accounts even if loading the archive fails or takes longer.
+    Promise.allSettled([api.sessions().then((list) => setSessions(groupSessions(list))), api.accounts().then(setAccounts)])
+      .then((results) => {
+        const failures = results.filter((r) => r.status === "rejected");
+        if (failures.length) throw failures.find((r) => r.reason instanceof AuthError)?.reason ?? failures[0].reason;
         setError("");
         setRefreshedAt(Date.now());
       })
@@ -36,13 +40,27 @@ export function useDashboard(owner: string, onAuthLost: () => void): Dashboard {
         if (e instanceof AuthError) onAuthLost();
         else setError(e.message);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        refreshing.current = false;
+        setLoading(false);
+      });
   }, [onAuthLost]);
 
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 30_000);
-    return () => clearInterval(id);
+    const id = setInterval(refresh, 15_000);
+    const resume = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("focus", resume);
+    window.addEventListener("online", refresh);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("online", refresh);
+    };
   }, [refresh]);
 
   const mutateAccounts = useCallback(

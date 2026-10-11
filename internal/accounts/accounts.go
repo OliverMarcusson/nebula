@@ -306,9 +306,6 @@ func (s *Store) Report(owner, device string, r Report) ([]Account, error) {
 			if p.Usage != nil && (a.Usage == nil || p.Usage.ObservedAt.After(a.Usage.ObservedAt)) {
 				u := *p.Usage
 				u.DeviceID = device
-				if u.Grants == nil && a.Usage != nil {
-					u.Grants = a.Usage.Grants // a cached reading knows nothing of resets
-				}
 				a.Usage = &u
 				// A reading after the limit was hit that shows room clears it.
 				if a.LimitedUntil != nil && !u.Exhausted(now) && u.ObservedAt.After(a.LimitedUntil.Add(-limitedFor)) {
@@ -389,15 +386,20 @@ func (s *Store) SetLimited(owner, id string, until *time.Time) ([]Account, error
 	})
 }
 
-// staleAfter bounds how long a usage reading counts as evidence.
-const staleAfter = 6 * time.Hour
+// Fresh bounds how long a reading counts as evidence.
+func (u *Usage) Fresh(now time.Time) bool {
+	if u == nil || u.ObservedAt.IsZero() || now.Sub(u.ObservedAt) < 0 || now.Sub(u.ObservedAt) >= 2*time.Minute {
+		return false
+	}
+	return true
+}
 
 // Limited reports whether the account should be avoided right now.
 func (a Account) Limited(now time.Time) bool {
 	if a.LimitedUntil != nil && a.LimitedUntil.After(now) {
 		return true
 	}
-	return a.Usage != nil && now.Sub(a.Usage.ObservedAt) < staleAfter && a.Usage.Exhausted(now)
+	return a.Usage.Fresh(now) && a.Usage.Exhausted(now)
 }
 
 // Candidates orders the accounts a device may use: connected and enabled ones

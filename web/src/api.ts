@@ -113,6 +113,7 @@ async function request<T>(path: string, init: { method?: string; body?: unknown;
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     cache: "no-store",
     redirect: "error",
+    signal: AbortSignal.timeout(15_000),
   });
   if (res.status === 401) throw new AuthError("Token rejected");
   if (!res.ok) throw new Error((await res.text()).trim() || `Nebula returned HTTP ${res.status}`);

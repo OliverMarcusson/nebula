@@ -75,10 +75,16 @@ account can resume any session. Profiles you manage yourself can be added with
 `NEBULA_PROFILES` (absolute paths, `:`-separated on Linux, `;` on Windows).
 
 The companion reports each profile's signed-in identity and usage: Claude Code's
-cached reading, refreshed every five minutes from Claude's usage endpoint with
+cached reading, refreshed every minute from Claude's usage endpoint with
 the profile's own access token while it is valid. The token is never refreshed,
 logged, or sent anywhere but Anthropic. In the dashboard, connected accounts can
 be reordered, opted out of switching, or disconnected.
+
+The server polls shared accounts once for all devices, independently of token
+renewal. Failed usage requests retry after fifteen seconds. The dashboard checks
+every fifteen seconds and when the tab becomes active; readings older than two
+minutes or past a window's reset are shown as unavailable while refresh retries.
+Old percentages and reset offers are never presented as current.
 
 ### Shared accounts
 

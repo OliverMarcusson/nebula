@@ -82,6 +82,9 @@ func ParseUsage(raw []byte, observed time.Time) (*Usage, error) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, err
 	}
+	if body.Limits == nil {
+		return nil, errors.New("usage response has no limits")
+	}
 	usage := &Usage{ObservedAt: observed.UTC(), Limits: []Limit{}}
 	for _, l := range body.Limits {
 		if l.Kind == "" || l.Percent == nil || len(usage.Limits) == 32 {

@@ -64,7 +64,7 @@ func redeem(ctx context.Context, list string, r resets.Reset) (state, msg string
 			if _, err := accessToken(credentialsFile(p)); err == nil {
 				file = credentialsFile(p)
 				usageCache.Lock()
-				delete(usageCache.at, p.Dir) // report the result on the next sync
+				delete(usageCache.entries, p.Dir) // report the result on the next sync
 				usageCache.Unlock()
 				break
 			}

@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,14 +26,21 @@ import (
 
 const (
 	usageURL      = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
-	usageInterval = 5 * time.Minute
+	usageInterval = time.Minute
+	usageRetry    = 15 * time.Second
 )
+
+type usageReading struct {
+	token [32]byte
+	next  time.Time
+	value *accounts.Usage
+	done  chan struct{}
+}
 
 var usageCache = struct {
 	sync.Mutex
-	at    map[string]time.Time
-	value map[string]*accounts.Usage
-}{at: map[string]time.Time{}, value: map[string]*accounts.Usage{}}
+	entries map[string]*usageReading
+}{entries: map[string]*usageReading{}}
 
 // Requests are bounded by their context instead; a reset may take longer.
 var usageClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -46,23 +56,57 @@ func credentialsFile(p profile) string {
 // liveUsage returns a reading at most usageInterval old, or nil when the
 // profile has no usable token (expired, missing scope, or kept in a keychain).
 func liveUsage(ctx context.Context, p profile) *accounts.Usage {
-	usageCache.Lock()
-	if time.Since(usageCache.at[p.Dir]) < usageInterval {
-		u := usageCache.value[p.Dir]
+	file := credentialsFile(p)
+	token, err := accessToken(file)
+	if err != nil {
+		return nil
+	}
+	hash := sha256.Sum256([]byte(token))
+	for {
+		usageCache.Lock()
+		cached := usageCache.entries[p.Dir]
+		if cached != nil && cached.token == hash {
+			if cached.done != nil {
+				done := cached.done
+				usageCache.Unlock()
+				select {
+				case <-done:
+					continue
+				case <-ctx.Done():
+					return nil
+				}
+			}
+			if time.Now().Before(cached.next) && (cached.value == nil || cached.value.Fresh(time.Now())) {
+				u := cached.value
+				usageCache.Unlock()
+				return u
+			}
+		}
+		reading := &usageReading{token: hash, done: make(chan struct{})}
+		usageCache.entries[p.Dir] = reading
+		usageCache.Unlock()
+
+		u, err := fetchUsage(ctx, file)
+		delay := usageInterval
+		if err != nil {
+			u, delay = nil, usageRetry
+			// Never log the request, token, or response body.
+			log.Printf("Usage refresh failed for %s: %v", p.Name, err)
+		}
+		usageCache.Lock()
+		reading.value, reading.next = u, time.Now().Add(delay)
+		if u != nil {
+			for _, l := range u.Limits {
+				if l.ResetsAt != nil && l.ResetsAt.After(u.ObservedAt) && l.ResetsAt.Before(reading.next) {
+					reading.next = *l.ResetsAt
+				}
+			}
+		}
+		close(reading.done)
+		reading.done = nil
 		usageCache.Unlock()
 		return u
 	}
-	usageCache.at[p.Dir] = time.Now()
-	usageCache.Unlock()
-
-	u, err := fetchUsage(ctx, credentialsFile(p))
-	if err != nil {
-		u = nil
-	}
-	usageCache.Lock()
-	usageCache.value[p.Dir] = u
-	usageCache.Unlock()
-	return u
 }
 
 // accessToken returns a profile's access token while it is still valid.
@@ -121,7 +165,7 @@ func fetchUsage(ctx context.Context, file string) (*accounts.Usage, error) {
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, errors.New("usage request refused")
+		return nil, fmt.Errorf("usage request refused (HTTP %d)", status)
 	}
 	u, err := accounts.ParseUsage(body, time.Now())
 	if err != nil {

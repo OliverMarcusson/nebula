@@ -10,7 +10,13 @@ import { ease, stagger } from "./motion";
 // Claude accounts that the user's devices are signed into: connecting,
 // ordering, usage, and the usage resets each account has to spend.
 
-const STALE_MS = 30 * 60_000;
+const STALE_MS = 2 * 60_000;
+
+function freshUsage(a: Account) {
+  if (!a.usage) return false;
+  const age = Date.now() - Date.parse(a.usage.observed_at);
+  return age >= 0 && age < STALE_MS && a.usage.limits.every((l) => !l.resets_at || Date.parse(l.resets_at) > Date.now());
+}
 
 const plans: Record<string, string> = {
   claude_pro: "Pro",
@@ -41,6 +47,12 @@ const quiet = "rounded-lg border border-white/10 text-[#c9c2e6] hover:bg-white/[
 
 export default function Accounts(d: Dashboard) {
   const [adding, setAdding] = useState(false);
+  // Expire readings and update countdowns even when network requests fail.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const connected = d.accounts.filter((a) => a.state === "connected");
   const detected = d.accounts.filter((a) => a.state === "detected");
 
@@ -122,7 +134,7 @@ export default function Accounts(d: Dashboard) {
   );
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+function Section({ title, count, children }: { title: string; count: number | string; children: React.ReactNode }) {
   return (
     <motion.section layout="position" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-12">
       <h2 className="mb-6 flex items-baseline gap-2 border-b border-white/[0.07] pb-3 text-sm font-medium text-white">
@@ -162,7 +174,7 @@ function Tag({ children, tone = "plain" }: { children: React.ReactNode; tone?: "
 function AccountRow({ account: a, index, children }: { account: Account; index: number; children: React.ReactNode }) {
   const name = a.display_name || a.email || a.id.slice(0, 8);
   const p = plan(a);
-  const stale = a.usage ? Date.now() - Date.parse(a.usage.observed_at) > STALE_MS : true;
+  const fresh = freshUsage(a);
   const shared = isShared(a);
   const devices = a.sightings.filter((s) => s.device_id !== SHARED_DEVICE);
   const source = (id: string) => (id === SHARED_DEVICE ? "server" : fmt.short(id));
@@ -199,19 +211,19 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
           </div>
           {children}
         </div>
-        {a.usage?.limits.length ? (
+        {fresh && a.usage?.limits.length ? (
           <>
             <div className="mt-4 grid gap-x-8 gap-y-4 sm:grid-cols-2">
               {a.usage.limits.map((l) => (
-                <Meter key={l.kind} limit={l} stale={stale} />
+                <Meter key={l.kind} limit={l} />
               ))}
             </div>
             <p className="mt-3 text-[11px] text-[#8b84ad]">
-              {stale ? "Stale. " : ""}Usage as of {fmt.ago(a.usage.observed_at)} from {source(a.usage.device_id)}
+              Usage as of {fmt.ago(a.usage.observed_at)} from {source(a.usage.device_id)}
             </p>
           </>
         ) : (
-          connected && <p className="mt-3 text-xs text-[#8b84ad]">Usage unknown</p>
+          connected && <p className="mt-3 text-xs text-[#8b84ad]" role="status">{a.usage ? `Current usage unavailable. Last reading ${fmt.ago(a.usage.observed_at)}. Retrying automatically.` : "Waiting for current usage. Retrying automatically."}</p>
         )}
       </div>
     </motion.article>
@@ -224,7 +236,7 @@ const severity: Record<string, { bar: string; text: string; label: string }> = {
   exhausted: { bar: "bg-[#ff9fbf]", text: "text-[#ff9fbf]", label: "At limit" },
 };
 
-function Meter({ limit: l, stale }: { limit: Limit; stale: boolean }) {
+function Meter({ limit: l }: { limit: Limit }) {
   const s = l.severity ? severity[l.severity] : undefined;
   const pct = Math.min(100, Math.max(0, l.percent));
   return (
@@ -239,11 +251,11 @@ function Meter({ limit: l, stale }: { limit: Limit; stale: boolean }) {
             </span>
           )}
         </span>
-        <span className={`tabular text-sm font-medium ${stale ? "text-[#8b84ad]" : s ? s.text : "text-white"}`}>{Math.round(l.percent)}%</span>
+        <span className={`tabular text-sm font-medium ${s ? s.text : "text-white"}`}>{Math.round(l.percent)}%</span>
       </div>
       <div className="mt-1.5 h-[3px] rounded-full bg-white/[0.06]" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${limitLabel(l)} usage`}>
         <motion.div
-          className={`h-full rounded-full ${stale ? "bg-white/25" : s ? s.bar : "edge-x"}`}
+          className={`h-full rounded-full ${s ? s.bar : "edge-x"}`}
           initial={{ width: 0 }}
           animate={{ width: `${pct}%` }}
           transition={{ duration: 0.7, ease, delay: 0.1 }}
@@ -350,16 +362,21 @@ function Resets({ accounts }: { accounts: Account[] }) {
   };
   const cancel = (id: string) => api.cancelReset(id).then((r) => setList((l) => l.map((x) => (x.id === r.id ? r : x)))).catch(fail);
 
-  const rows = accounts.flatMap((a) => (a.usage?.grants ?? []).map((g) => ({ a, g })));
+  const rows = accounts.flatMap((a) => (freshUsage(a) ? a.usage?.grants ?? [] : [])
+    .filter((g) => !g.ends_at || Date.parse(g.ends_at) > Date.now())
+    .map((g) => ({ a, g })));
+  const unknown = accounts.some((a) => !freshUsage(a) || a.usage?.grants == null);
+  const total = rows.reduce((n, { g }) => n + g.resets_left, 0);
   if (!accounts.length) return null;
   return (
-    <Section title="Resets" count={rows.reduce((n, { g }) => n + g.resets_left, 0)}>
+    <Section title="Resets" count={unknown ? total ? `At least ${total}` : "Unknown" : total}>
       {error && (
         <motion.p key="error" layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[13px] text-[#ffb8cf]">
           {error}
         </motion.p>
       )}
-      {!rows.length && <Empty key="empty">No account has a usage reset to spend. Offers appear here as devices report them.</Empty>}
+      {unknown && <Empty key="unknown">Current reset offers are unavailable for some accounts. Retrying automatically.</Empty>}
+      {!rows.length && !unknown && <Empty key="empty">No account has a usage reset to spend.</Empty>}
       {rows.map(({ a, g }, i) => {
         const last = list.find((r) => r.account_id === a.id);
         const open = !!last && openReset(last);

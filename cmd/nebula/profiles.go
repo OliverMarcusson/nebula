@@ -131,9 +131,12 @@ func localAccounts(list string) (accounts.Report, error) {
 		if p == nil || !usableToken(pr) {
 			continue // signed out: not available on this device
 		}
-		// Prefer a live reading over Claude Code's cache when it is newer.
-		if u := liveUsage(context.Background(), pr); u != nil && (p.Usage == nil || u.ObservedAt.After(p.Usage.ObservedAt)) {
-			p.Usage = u
+		// Shared usage is polled by the server once for all devices. Devices
+		// still report newer Claude Code cache readings without duplicate API traffic.
+		if sharedAccount(pr.Dir) == "" {
+			if u := liveUsage(context.Background(), pr); u != nil && (p.Usage == nil || u.ObservedAt.After(p.Usage.ObservedAt)) {
+				p.Usage = u
+			}
 		}
 		rep.Profiles = append(rep.Profiles, *p)
 	}

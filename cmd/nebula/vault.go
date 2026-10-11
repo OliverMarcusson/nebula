@@ -39,7 +39,7 @@ const (
 	// always hold several hours of it.
 	renewBelow  = 4 * time.Hour
 	renewRetry  = 15 * time.Minute
-	vaultReport = 5 * time.Minute
+	vaultReport = 15 * time.Second
 )
 
 type vault struct {
@@ -53,6 +53,8 @@ type vault struct {
 	failed map[string]time.Time // account dir -> last failed renewal
 	// work serializes sign-ins finishing, renewals, and removals on disk.
 	work sync.Mutex
+	// reports keeps an older report from overwriting a sign-in or removal.
+	reports sync.Mutex
 }
 
 // vaultToken is what a device receives for one account.
@@ -102,6 +104,23 @@ func (v *vault) run(ctx context.Context) {
 			}
 		}
 	}
+	// Usage must keep updating even while a token renewal runs Claude.
+	go func() {
+		ticker := time.NewTicker(vaultReport)
+		defer ticker.Stop()
+		for {
+			for _, owner := range v.owners {
+				if err := v.report(ctx, owner); err != nil {
+					log.Print("Vault account report failed: ", err)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	var maintained time.Time
 	for {
 		for _, owner := range v.owners {
@@ -282,8 +301,7 @@ func (v *vault) Remove(owner, account string) error {
 	return v.report(context.Background(), owner)
 }
 
-// maintain renews tokens running low and reports the vault's accounts with
-// fresh usage, read with the vault's own tokens.
+// maintain renews tokens running low; usage reporting runs independently.
 func (v *vault) maintain(ctx context.Context) {
 	if !v.work.TryLock() {
 		return
@@ -311,11 +329,6 @@ func (v *vault) maintain(ctx context.Context) {
 		}
 	}
 	v.work.Unlock()
-	for _, owner := range v.owners {
-		if err := v.report(ctx, owner); err != nil {
-			log.Print("Vault account report failed: ", err)
-		}
-	}
 }
 
 // renew has the vault's claude renew its own sign-in. Claude Code renews
@@ -378,6 +391,8 @@ func (v *vault) renew(ctx context.Context, dir string) error {
 
 // report records the vault's accounts as signed in on the vault device.
 func (v *vault) report(ctx context.Context, owner string) error {
+	v.reports.Lock()
+	defer v.reports.Unlock()
 	rep := accounts.Report{Profiles: []accounts.Profile{}}
 	for _, dir := range v.accountDirs(owner) {
 		p, err := accounts.ReadLocal("vault", filepath.Join(dir, ".claude.json"))
@@ -388,11 +403,20 @@ func (v *vault) report(ctx context.Context, owner string) error {
 			continue // signed out; nothing left to share
 		}
 		p.Profile = profileName(p.Email)
-		if u := liveUsage(ctx, profile{Name: p.Profile, Dir: dir}); u != nil {
-			p.Usage = u
-		}
 		rep.Profiles = append(rep.Profiles, *p)
 	}
+	// One slow account must not delay the other accounts' usage requests.
+	var requests sync.WaitGroup
+	for i := range rep.Profiles {
+		requests.Go(func() {
+			p := &rep.Profiles[i]
+			dir := filepath.Join(v.ownerDir(owner), p.AccountUUID)
+			if u := liveUsage(ctx, profile{Name: p.Profile, Dir: dir}); u != nil {
+				p.Usage = u
+			}
+		})
+	}
+	requests.Wait()
 	_, err := v.store.Report(owner, vaultDevice, rep)
 	return err
 }
