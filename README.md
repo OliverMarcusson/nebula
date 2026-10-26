@@ -128,6 +128,11 @@ within the same turn. Nebula gives a switch notice; no continue prompt is needed
 If all eligible accounts are exhausted, the failure is shown and work stops.
 For `-p` runs without streaming input, the next run uses another account.
 
+In T3 Code, an API error saying the organization has disabled Claude subscription
+access also tries the next eligible account. It skips the inaccessible account
+for that recovery without recording a usage limit. Unrelated permission errors
+and ordinary conversation text do not trigger this fallback.
+
 ### Choosing an account
 
 Accounts can differ in more than their limits (one may have access the others

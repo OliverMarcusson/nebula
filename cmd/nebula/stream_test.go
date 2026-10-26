@@ -55,6 +55,19 @@ func TestFakeStreamClaude(t *testing.T) {
 			case l.Type == "user" && l.Message.Content == "throttle":
 				_ = out.Encode(map[string]any{"type": "assistant", "error": "rate_limit"})
 				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "session_id": "sess-1"})
+			case l.Type == "user" && (account == "first" && strings.HasPrefix(l.Message.Content, "access denied") || os.Getenv("FAKE_ALWAYS_ACCESS_DENIED") != ""):
+				denied := "Your organization has disabled Claude subscription access for Claude Code"
+				_ = out.Encode(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": "work already completed"}})
+				if l.Message.Content != "access denied result" {
+					_ = out.Encode(map[string]any{"type": "assistant", "error": "authentication_failed", "message": map[string]any{"role": "assistant", "content": []map[string]string{{"type": "text", "text": denied}}}})
+				}
+				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "errors": []string{denied}, "session_id": "sess-1"})
+			case l.Type == "user" && l.Message.Content == "permission error":
+				_ = out.Encode(map[string]any{"type": "assistant", "error": "permission_denied", "message": map[string]any{"role": "assistant", "content": "API Error: 403 forbidden"}})
+				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "session_id": "sess-1"})
+			case l.Type == "user" && l.Message.Content == "quoted denial":
+				_ = out.Encode(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": "Your organization has disabled Claude subscription access for Claude Code"}})
+				_ = out.Encode(map[string]any{"type": "result", "is_error": false, "session_id": "sess-1"})
 			case l.Type == "user":
 				if l.UUID != "" {
 					_ = out.Encode(map[string]any{"type": "user", "uuid": l.UUID, "message": map[string]any{"role": "user", "content": l.Message.Content}})
@@ -163,6 +176,84 @@ func TestStreamSwitchesAccountAfterLimit(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("launcher did not exit after the host closed stdin")
 	}
+}
+
+func TestStreamSwitchesAfterSubscriptionAccessDisabled(t *testing.T) {
+	for _, trigger := range []string{"access denied", "access denied result"} {
+		t.Run(trigger, func(t *testing.T) {
+			switches := 0
+			h, done := startStream(t, func(session string, resetsAt *time.Time) ([]string, []string, bool) {
+				switches++
+				if session != "sess-1" || resetsAt != nil {
+					t.Errorf("access failure is not a quota window: session %q, reset %v", session, resetsAt)
+				}
+				args := sessionArgs([]string{"-test.run=^TestFakeStreamClaude$", "--", "--model", "opus"}, session)
+				return args, append(os.Environ(), "FAKE_ACCOUNT=second"), true
+			})
+			t.Cleanup(func() { h.in.Close() })
+			h.send(map[string]any{"type": "control_request", "request_id": "init", "request": map[string]any{"subtype": "initialize"}})
+			h.read()
+			h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": trigger}})
+			if m := h.read(); m["type"] != "assistant" || m["error"] != nil {
+				t.Fatalf("completed work must remain visible: %v", m)
+			}
+			m := h.read()
+			if m["type"] != "result" || m["is_error"] == true || !strings.HasPrefix(fmt.Sprint(m["result"]), "second ") || m["prompt"] != continuePrompt {
+				t.Fatalf("expected resumed second account, got %v", m)
+			}
+			if switches != 1 {
+				t.Fatalf("switches = %d, want 1", switches)
+			}
+			h.in.Close()
+			if code := <-done; code != 0 {
+				t.Fatalf("launcher exit = %d", code)
+			}
+		})
+	}
+}
+
+func TestStreamDoesNotSwitchForOtherAccessText(t *testing.T) {
+	for _, trigger := range []string{"permission error", "quoted denial"} {
+		t.Run(trigger, func(t *testing.T) {
+			h, done := startStream(t, func(string, *time.Time) ([]string, []string, bool) {
+				t.Error("must not rotate for unrelated permission errors or ordinary assistant text")
+				return nil, nil, false
+			})
+			t.Cleanup(func() { h.in.Close() })
+			h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": trigger}})
+			if m := h.read(); m["type"] != "assistant" {
+				t.Fatalf("expected original assistant message, got %v", m)
+			}
+			if m := h.read(); m["type"] != "result" || (m["is_error"] == true) != (trigger == "permission error") {
+				t.Fatalf("expected original result, got %v", m)
+			}
+			h.in.Close()
+			<-done
+		})
+	}
+}
+
+func TestStreamStopsWhenReplacementAlsoHasSubscriptionAccessDisabled(t *testing.T) {
+	switches := 0
+	h, done := startStream(t, func(session string, resetsAt *time.Time) ([]string, []string, bool) {
+		switches++
+		if switches > 1 {
+			return nil, nil, false
+		}
+		return sessionArgs([]string{"-test.run=^TestFakeStreamClaude$", "--"}, session), append(os.Environ(), "FAKE_ACCOUNT=second", "FAKE_ALWAYS_ACCESS_DENIED=1"), true
+	})
+	t.Cleanup(func() { h.in.Close() })
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "access denied"}})
+	h.read() // completed work from the first account
+	h.read() // completed work from the replacement
+	if m := h.read(); m["type"] != "assistant" || m["error"] != "authentication_failed" {
+		t.Fatalf("expected the final account's error, got %v", m)
+	}
+	if m := h.read(); m["type"] != "result" || m["is_error"] != true || switches != 2 {
+		t.Fatalf("expected terminal access failure after two accounts, got %v (switches %d)", m, switches)
+	}
+	h.in.Close()
+	<-done
 }
 
 func TestStreamStaysWithoutAnotherAccount(t *testing.T) {

@@ -30,7 +30,7 @@ import (
 // host stays in the same turn. A continuation asks Claude to finish the
 // unfinished task using the saved conversation, without replaying the request.
 
-const continuePrompt = "Continue the unfinished task from where you stopped before the usage limit. Use the existing conversation and completed tool results; do not restart the task or repeat completed actions."
+const continuePrompt = "Continue the unfinished task from where you stopped before the account became unavailable. Use the existing conversation and completed tool results; do not restart the task or repeat completed actions."
 
 // streamJSON reports whether the host drives Claude over stream-json.
 func streamJSON(args []string) bool {
@@ -82,14 +82,19 @@ var stateRequests = []string{"initialize", "set_permission_mode", "set_model", "
 var cumulativeRequests = []string{"apply_flag_settings", "mcp_toggle"}
 
 type streamLine struct {
-	Type      string          `json:"type"`
-	RequestID string          `json:"request_id"`
-	SessionID string          `json:"session_id"`
-	UUID      string          `json:"uuid"`
-	Error     string          `json:"error"`
-	IsError   bool            `json:"is_error"`
-	Request   json.RawMessage `json:"request"`
-	Response  struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	SessionID string `json:"session_id"`
+	UUID      string `json:"uuid"`
+	Error     string `json:"error"`
+	IsError   bool   `json:"is_error"`
+	Message   struct {
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+	Result   json.RawMessage `json:"result"`
+	Errors   json.RawMessage `json:"errors"`
+	Request  json.RawMessage `json:"request"`
+	Response struct {
 		RequestID string `json:"request_id"`
 	} `json:"response"`
 	RateLimit struct {
@@ -117,6 +122,42 @@ type stateRequest struct {
 	request json.RawMessage
 }
 
+// This is an account-specific access failure, not a usage limit. Only API
+// error messages qualify; quoting the text in a normal conversation must
+// never cause an account switch.
+func accountAccessDisabled(l streamLine) bool {
+	if l.Type != "assistant" || l.Error == "" {
+		if l.Type != "result" || !l.IsError {
+			return false
+		}
+	}
+	const disabled = "your organization has disabled claude subscription access for claude code"
+	contains := func(s string) bool { return strings.Contains(strings.ToLower(s), disabled) }
+	for _, raw := range []json.RawMessage{l.Message.Content, l.Result, l.Errors} {
+		var text string
+		if json.Unmarshal(raw, &text) == nil && contains(text) {
+			return true
+		}
+		var texts []string
+		if json.Unmarshal(raw, &texts) == nil {
+			for _, text := range texts {
+				if contains(text) {
+					return true
+				}
+			}
+		}
+		var blocks []struct{ Type, Text string }
+		if json.Unmarshal(raw, &blocks) == nil {
+			for _, b := range blocks {
+				if b.Type == "text" && contains(b.Text) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // nextProcess decides where a thread goes after its account hit its limit:
 // the arguments and environment for the replacement, or false to stay.
 type nextProcess func(session string, resetsAt *time.Time) (args, env []string, ok bool)
@@ -140,6 +181,7 @@ type streamProxy struct {
 	interrupted    bool
 	continuationID string
 	recovering     bool // only accessed by pump and its next callback
+	accessDisabled bool // same ownership; do not report this failure as exhausted quota
 }
 
 func superviseStream(claude string, args []string, ch choice) int {
@@ -150,17 +192,23 @@ func superviseStream(claude string, args []string, ch choice) int {
 		if ch.account == nil {
 			return nil, nil, false
 		}
-		reportLimited(ctx, ch.account.ID, resetsAt)
+		if !p.accessDisabled {
+			reportLimited(ctx, ch.account.ID, resetsAt)
+		}
 		if !p.recovering {
 			exclude = map[string]bool{}
 		}
 		exclude[ch.account.ID] = true
 		next, err := pick(ctx, exclude)
+		reason := "reached its usage limit"
+		if p.accessDisabled {
+			reason = "cannot access Claude subscription sessions"
+		}
 		if err != nil || next.account == nil {
-			fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit and no other connected account has room.\n", ch.label())
+			fmt.Fprintf(os.Stderr, "nebula: %s %s and no other connected account has room.\n", ch.label(), reason)
 			return nil, nil, false
 		}
-		fmt.Fprintf(os.Stderr, "nebula: %s reached its usage limit; continuing this session on %s\n", ch.label(), next.label())
+		fmt.Fprintf(os.Stderr, "nebula: %s %s; continuing this session on %s\n", ch.label(), reason, next.label())
 		_ = os.WriteFile(lastChoiceFile(), []byte(next.profile.Dir+"\n"), 0600)
 		if managed, _ := managedDir(); filepath.Dir(next.profile.Dir) == managed {
 			_ = linkShared(next.profile.Dir)
@@ -395,11 +443,16 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 	r := bufio.NewReaderSize(stdout, 1<<16)
 	var limitedUntil *time.Time
 	limited := false
+	p.accessDisabled = false
 	var failure [][]byte
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
 			l, _ := lineType(line, "rate_limit_event", "assistant", "user", "result", "control_request", "control_response")
+			accessDisabled := accountAccessDisabled(l)
+			if accessDisabled {
+				p.accessDisabled = true
+			}
 			forward := true
 			switch l.Type {
 			case "rate_limit_event":
@@ -413,7 +466,7 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 					forward = false
 				}
 			case "assistant":
-				if l.Error == "rate_limit" {
+				if l.Error == "rate_limit" || accessDisabled {
 					failure = append(failure, slices.Clone(line))
 					forward = false
 				}
@@ -433,7 +486,7 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 				}
 				p.mu.Unlock()
 			}
-			decide := l.Type == "result" && l.IsError && limited && !switching && l.SessionID != ""
+			decide := l.Type == "result" && l.IsError && (limited || p.accessDisabled) && !switching && l.SessionID != ""
 			if decide {
 				p.hold()
 				p.mu.Lock()
@@ -458,6 +511,7 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 					p.recovering = false
 				}
 				failure, limited, limitedUntil = nil, false, nil
+				p.accessDisabled = false
 			}
 			if forward {
 				_, _ = p.out.Write(line)
