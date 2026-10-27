@@ -125,6 +125,8 @@ T3 Code keeps one Claude Code process per thread, so there the launcher stays
 between them: it withholds the recoverable limit failure, starts Claude on the
 next account with `--resume`, replays T3 Code's setup, and continues the task
 within the same turn. Nebula gives a switch notice; no continue prompt is needed.
+Background agents run on the old process's account and stop with it; the
+continuation names them so Claude resumes each one on the new account.
 If all eligible accounts are exhausted, the failure is shown and work stops.
 For `-p` runs without streaming input, the next run uses another account.
 

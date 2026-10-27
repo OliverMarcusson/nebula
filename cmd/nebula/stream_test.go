@@ -44,6 +44,12 @@ func TestFakeStreamClaude(t *testing.T) {
 				} `json:"message"`
 			}
 			_ = json.Unmarshal(line, &l)
+			if account == "first" && l.Message.Content == "agents hit limit" {
+				// Two background agents; the limit ends one before the main turn.
+				_ = out.Encode(map[string]any{"type": "system", "subtype": "background_tasks_changed", "tasks": []map[string]string{{"task_id": "a1", "task_type": "local_agent"}, {"task_id": "a2", "task_type": "local_agent"}, {"task_id": "b1", "task_type": "local_bash"}}})
+				_ = out.Encode(map[string]any{"type": "system", "subtype": "task_updated", "task_id": "a1", "patch": map[string]string{"status": "failed", "error": "Agent terminated early due to an API error: You've hit your session limit"}})
+				_ = out.Encode(map[string]any{"type": "system", "subtype": "background_tasks_changed", "tasks": []map[string]string{{"task_id": "a2", "task_type": "local_agent"}}})
+			}
 			switch {
 			case l.Type == "control_request":
 				_ = out.Encode(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": l.RequestID, "response": map[string]string{"account": account, "handled": l.Request.Subtype}}})
@@ -62,6 +68,13 @@ func TestFakeStreamClaude(t *testing.T) {
 					_ = out.Encode(map[string]any{"type": "assistant", "error": "authentication_failed", "message": map[string]any{"role": "assistant", "content": []map[string]string{{"type": "text", "text": denied}}}})
 				}
 				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "errors": []string{denied}, "session_id": "sess-1"})
+			case l.Type == "user" && account == "first" && strings.HasPrefix(l.Message.Content, "subscription unavailable"):
+				denied := "Claude Code can't use your Claude subscription, usually because a payment is past due"
+				_ = out.Encode(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": "work already completed"}})
+				if l.Message.Content != "subscription unavailable result" {
+					_ = out.Encode(map[string]any{"type": "assistant", "error": "oauth_org_not_allowed", "api_error_status": 403, "api_error_code": "oauth_not_allowed_for_organization", "message": map[string]any{"role": "assistant", "content": []map[string]string{{"type": "text", "text": denied}}}})
+				}
+				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "api_error_status": 403, "api_error_code": "oauth_not_allowed_for_organization", "result": denied, "session_id": "sess-1"})
 			case l.Type == "user" && l.Message.Content == "permission error":
 				_ = out.Encode(map[string]any{"type": "assistant", "error": "permission_denied", "message": map[string]any{"role": "assistant", "content": "API Error: 403 forbidden"}})
 				_ = out.Encode(map[string]any{"type": "result", "is_error": true, "session_id": "sess-1"})
@@ -178,8 +191,28 @@ func TestStreamSwitchesAccountAfterLimit(t *testing.T) {
 	}
 }
 
+func TestStreamContinuationResumesLostAgents(t *testing.T) {
+	h, done := startStream(t, func(session string, _ *time.Time) ([]string, []string, bool) {
+		args := sessionArgs([]string{"-test.run=^TestFakeStreamClaude$", "--", "--output-format", "stream-json", "--input-format", "stream-json", "--session-id=sess-1"}, session)
+		return args, append(os.Environ(), "FAKE_ACCOUNT=second"), true
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "agents hit limit"}})
+	for {
+		m := h.read()
+		if m["type"] != "result" {
+			continue
+		}
+		if want := continuation([]string{"a1", "a2"}); m["prompt"] != want {
+			t.Fatalf("continuation %q, want %q", m["prompt"], want)
+		}
+		break
+	}
+	h.in.Close()
+	<-done
+}
+
 func TestStreamSwitchesAfterSubscriptionAccessDisabled(t *testing.T) {
-	for _, trigger := range []string{"access denied", "access denied result"} {
+	for _, trigger := range []string{"access denied", "access denied result", "subscription unavailable", "subscription unavailable result"} {
 		t.Run(trigger, func(t *testing.T) {
 			switches := 0
 			h, done := startStream(t, func(session string, resetsAt *time.Time) ([]string, []string, bool) {
@@ -398,5 +431,30 @@ func TestSessionArgs(t *testing.T) {
 	}
 	if !streamJSON([]string{"--output-format", "stream-json", "--verbose", "--input-format=stream-json"}) || streamJSON([]string{"--output-format", "stream-json", "-p", "hi"}) {
 		t.Error("streamJSON misread its flags")
+	}
+}
+
+func TestAccountAccessDisabledCodes(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"assistant error", `{"type":"assistant","error":"oauth_org_not_allowed"}`, true},
+		{"assistant API code", `{"type":"assistant","error":"authentication_failed","api_error_code":"oauth_not_allowed_for_organization"}`, true},
+		{"result API code", `{"type":"result","is_error":true,"api_error_code":"oauth_not_allowed_for_organization"}`, true},
+		{"unrelated error", `{"type":"assistant","error":"permission_denied","api_error_code":"permission_error"}`, false},
+		{"ordinary assistant", `{"type":"assistant","api_error_code":"oauth_not_allowed_for_organization"}`, false},
+		{"successful result", `{"type":"result","is_error":false,"api_error_code":"oauth_not_allowed_for_organization"}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var line streamLine
+			if err := json.Unmarshal([]byte(tt.line), &line); err != nil {
+				t.Fatal(err)
+			}
+			if got := accountAccessDisabled(line); got != tt.want {
+				t.Fatalf("accountAccessDisabled = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
