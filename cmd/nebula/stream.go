@@ -82,13 +82,14 @@ var stateRequests = []string{"initialize", "set_permission_mode", "set_model", "
 var cumulativeRequests = []string{"apply_flag_settings", "mcp_toggle"}
 
 type streamLine struct {
-	Type      string `json:"type"`
-	RequestID string `json:"request_id"`
-	SessionID string `json:"session_id"`
-	UUID      string `json:"uuid"`
-	Error     string `json:"error"`
-	IsError   bool   `json:"is_error"`
-	Message   struct {
+	Type         string `json:"type"`
+	RequestID    string `json:"request_id"`
+	SessionID    string `json:"session_id"`
+	UUID         string `json:"uuid"`
+	Error        string `json:"error"`
+	APIErrorCode string `json:"api_error_code"`
+	IsError      bool   `json:"is_error"`
+	Message      struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	Result   json.RawMessage `json:"result"`
@@ -130,6 +131,11 @@ func accountAccessDisabled(l streamLine) bool {
 		if l.Type != "result" || !l.IsError {
 			return false
 		}
+	}
+	// Claude's display text changes between versions; the structured codes
+	// still identify this account-specific subscription access failure.
+	if l.Error == "oauth_org_not_allowed" || l.APIErrorCode == "oauth_not_allowed_for_organization" {
+		return true
 	}
 	const disabled = "your organization has disabled claude subscription access for claude code"
 	contains := func(s string) bool { return strings.Contains(strings.ToLower(s), disabled) }
