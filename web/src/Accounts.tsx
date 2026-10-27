@@ -193,7 +193,11 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="truncate text-[15px] font-medium text-white">{name}</span>
-              {p && <Tag>{p}</Tag>}
+              {p && (
+                <span title="Plan last reported by Claude Code. This does not verify current subscription access.">
+                  <Tag>Last reported: {p}</Tag>
+                </span>
+              )}
               {shared && <Tag tone="shared">All devices</Tag>}
               {connected && !a.enabled && <Tag>Paused</Tag>}
               {a.limited_until && Date.parse(a.limited_until) > Date.now() && (
@@ -223,7 +227,7 @@ function AccountRow({ account: a, index, children }: { account: Account; index: 
             </p>
           </>
         ) : (
-          connected && <p className="mt-3 text-xs text-[#8b84ad]" role="status">{a.usage ? `Current usage unavailable. Last reading ${fmt.ago(a.usage.observed_at)}. Retrying automatically.` : "Waiting for current usage. Retrying automatically."}</p>
+          connected && <p className="mt-3 text-xs text-[#8b84ad]" role="status">{a.usage ? `Current usage unavailable. Last reading ${fmt.ago(a.usage.observed_at)}. Retrying automatically.` : "Waiting for current usage. Retrying automatically."} Subscription access is unverified.</p>
         )}
       </div>
     </motion.article>
