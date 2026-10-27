@@ -44,6 +44,12 @@ func TestFakeStreamClaude(t *testing.T) {
 				} `json:"message"`
 			}
 			_ = json.Unmarshal(line, &l)
+			if account == "first" && l.Message.Content == "agents hit limit" {
+				// Two background agents; the limit ends one before the main turn.
+				_ = out.Encode(map[string]any{"type": "system", "subtype": "background_tasks_changed", "tasks": []map[string]string{{"task_id": "a1", "task_type": "local_agent"}, {"task_id": "a2", "task_type": "local_agent"}, {"task_id": "b1", "task_type": "local_bash"}}})
+				_ = out.Encode(map[string]any{"type": "system", "subtype": "task_updated", "task_id": "a1", "patch": map[string]string{"status": "failed", "error": "Agent terminated early due to an API error: You've hit your session limit"}})
+				_ = out.Encode(map[string]any{"type": "system", "subtype": "background_tasks_changed", "tasks": []map[string]string{{"task_id": "a2", "task_type": "local_agent"}}})
+			}
 			switch {
 			case l.Type == "control_request":
 				_ = out.Encode(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": l.RequestID, "response": map[string]string{"account": account, "handled": l.Request.Subtype}}})
@@ -183,6 +189,26 @@ func TestStreamSwitchesAccountAfterLimit(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("launcher did not exit after the host closed stdin")
 	}
+}
+
+func TestStreamContinuationResumesLostAgents(t *testing.T) {
+	h, done := startStream(t, func(session string, _ *time.Time) ([]string, []string, bool) {
+		args := sessionArgs([]string{"-test.run=^TestFakeStreamClaude$", "--", "--output-format", "stream-json", "--input-format", "stream-json", "--session-id=sess-1"}, session)
+		return args, append(os.Environ(), "FAKE_ACCOUNT=second"), true
+	})
+	h.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "agents hit limit"}})
+	for {
+		m := h.read()
+		if m["type"] != "result" {
+			continue
+		}
+		if want := continuation([]string{"a1", "a2"}); m["prompt"] != want {
+			t.Fatalf("continuation %q, want %q", m["prompt"], want)
+		}
+		break
+	}
+	h.in.Close()
+	<-done
 }
 
 func TestStreamSwitchesAfterSubscriptionAccessDisabled(t *testing.T) {

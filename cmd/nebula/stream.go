@@ -32,6 +32,14 @@ import (
 
 const continuePrompt = "Continue the unfinished task from where you stopped before the account became unavailable. Use the existing conversation and completed tool results; do not restart the task or repeat completed actions."
 
+func continuation(agents []string) string {
+	if len(agents) == 0 {
+		return continuePrompt
+	}
+	return continuePrompt + " These background agents stopped with the old account: " + strings.Join(agents, ", ") +
+		". Resume each one with SendMessage to its id; do not start them again."
+}
+
 // streamJSON reports whether the host drives Claude over stream-json.
 func streamJSON(args []string) bool {
 	return flagValue(args, "--input-format") == "stream-json" && flagValue(args, "--output-format") == "stream-json"
@@ -83,6 +91,8 @@ var cumulativeRequests = []string{"apply_flag_settings", "mcp_toggle"}
 
 type streamLine struct {
 	Type         string `json:"type"`
+	Subtype      string `json:"subtype"`
+	TaskID       string `json:"task_id"`
 	RequestID    string `json:"request_id"`
 	SessionID    string `json:"session_id"`
 	UUID         string `json:"uuid"`
@@ -102,6 +112,14 @@ type streamLine struct {
 		Status   string `json:"status"`
 		ResetsAt int64  `json:"resetsAt"`
 	} `json:"rate_limit_info"`
+	Patch struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	} `json:"patch"`
+	Tasks []struct {
+		TaskID   string `json:"task_id"`
+		TaskType string `json:"task_type"`
+	} `json:"tasks"`
 }
 
 // lineType reads a line's top-level type, parsing it only when one of the
@@ -186,8 +204,10 @@ type streamProxy struct {
 	hostEnded      bool
 	interrupted    bool
 	continuationID string
-	recovering     bool // only accessed by pump and its next callback
-	accessDisabled bool // same ownership; do not report this failure as exhausted quota
+	recovering     bool     // only accessed by pump and its next callback
+	agents         []string // background agents running in the process; pump only
+	stopped        []string // agents an API error ended since the last finished turn; pump only
+	accessDisabled bool     // same ownership; do not report this failure as exhausted quota
 }
 
 func superviseStream(claude string, args []string, ch choice) int {
@@ -454,13 +474,15 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
-			l, _ := lineType(line, "rate_limit_event", "assistant", "user", "result", "control_request", "control_response")
+			l, _ := lineType(line, "rate_limit_event", "assistant", "user", "result", "control_request", "control_response", "system")
 			accessDisabled := accountAccessDisabled(l)
 			if accessDisabled {
 				p.accessDisabled = true
 			}
 			forward := true
 			switch l.Type {
+			case "system":
+				p.trackAgents(l)
 			case "rate_limit_event":
 				if l.RateLimit.Status == "rejected" {
 					limited = true
@@ -502,7 +524,7 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 					nextArgs, nextEnv, switching = p.next(l.SessionID, limitedUntil)
 				}
 				if switching {
-					forward = !p.continueTurn(l.SessionID)
+					forward = !p.continueTurn(l.SessionID, slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(p.stopped), p.agents...)))))
 					p.recovering = !forward
 					p.retire()
 				} else {
@@ -515,6 +537,7 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 						_, _ = p.out.Write(failed)
 					}
 					p.recovering = false
+					p.stopped = nil
 				}
 				failure, limited, limitedUntil = nil, false, nil
 				p.accessDisabled = false
@@ -532,10 +555,32 @@ func (p *streamProxy) pump(stdout io.Reader) (nextArgs, nextEnv []string, switch
 	}
 }
 
+// trackAgents follows the process's background agents. They run on its
+// account and cannot move with the session, so an account switch loses those
+// still running and those the limit already ended.
+func (p *streamProxy) trackAgents(l streamLine) {
+	switch l.Subtype {
+	case "background_tasks_changed":
+		p.agents = nil
+		for _, t := range l.Tasks {
+			if t.TaskType == "local_agent" {
+				p.agents = append(p.agents, t.TaskID)
+			}
+		}
+	case "task_updated":
+		// "Agent terminated early due to an API error: ..."
+		if l.Patch.Status == "failed" && strings.Contains(l.Patch.Error, "API error") && slices.Contains(p.agents, l.TaskID) {
+			p.stopped = append(p.stopped, l.TaskID)
+		}
+	}
+}
+
 // continueTurn queues a fresh continuation before messages received during
 // handoff. The original user request and completed tools remain in the session.
 // An interrupt received during account selection must not restart the work.
-func (p *streamProxy) continueTurn(session string) bool {
+// Background agents lost with the old process are named so the model resumes
+// them on the new account.
+func (p *streamProxy) continueTurn(session string, agents []string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.interrupted {
@@ -548,7 +593,7 @@ func (p *streamProxy) continueTurn(session string) bool {
 	line, _ := json.Marshal(map[string]any{
 		"type": "user", "session_id": session, "uuid": p.continuationID,
 		"parent_tool_use_id": nil,
-		"message":            map[string]string{"role": "user", "content": continuePrompt},
+		"message":            map[string]string{"role": "user", "content": continuation(agents)},
 	})
 	p.queue = append([][]byte{append(line, '\n')}, p.queue...)
 	return true
